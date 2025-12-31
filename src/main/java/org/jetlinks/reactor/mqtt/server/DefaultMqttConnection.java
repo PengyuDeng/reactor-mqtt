@@ -24,7 +24,9 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
+import reactor.netty.NettyInbound;
 import reactor.netty.NettyOutbound;
+import reactor.netty.channel.ChannelOperations;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -61,6 +63,7 @@ public class DefaultMqttConnection implements MqttConnection {
     }
 
     private final Connection connection;
+    private final NettyInbound inbound;
     private final NettyOutbound outbound;
 
     private volatile String clientId = "unknown";
@@ -81,9 +84,10 @@ public class DefaultMqttConnection implements MqttConnection {
 
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
-    public DefaultMqttConnection(Connection connection) {
-        this.connection = connection;
-        this.outbound = connection.outbound();
+    public DefaultMqttConnection(NettyInbound inbound, NettyOutbound outbound) {
+        this.inbound = inbound;
+        this.outbound = outbound;
+        this.connection = (Connection) inbound;
         LAST_PING_TIME.set(this, System.currentTimeMillis());
 
         connection.onDispose(() -> {
@@ -114,11 +118,10 @@ public class DefaultMqttConnection implements MqttConnection {
      * 启动消息处理流程（用于 handle 模式）
      */
     private Flux<Void> handleInbound() {
-        return connection.inbound()
-                         .receiveObject()
-                         .onBackpressureDrop(drop -> System.out.println("drop = " + drop))
-                         .cast(MqttMessage.class)
-                         .concatMap(this::handleMqttMessageSync);
+        return inbound
+                .receiveObject()
+                .cast(MqttMessage.class)
+                .concatMap(this::handleMqttMessageSync);
     }
 
     /**

@@ -22,9 +22,12 @@ import io.netty.handler.codec.mqtt.MqttDecoder;
 import io.netty.handler.codec.mqtt.MqttEncoder;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.timeout.IdleStateHandler;
+import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 import reactor.netty.Connection;
 import reactor.netty.DisposableServer;
+import reactor.netty.NettyInbound;
+import reactor.netty.NettyOutbound;
 import reactor.netty.resources.LoopResources;
 import reactor.netty.tcp.TcpServer;
 
@@ -276,12 +279,13 @@ public class MqttServer {
                                     .childOption(ChannelOption.SO_KEEPALIVE, tcpKeepAlive)
                                     .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(writeBufferLow, writeBufferHigh))
                                     .doOnConnection(this::initPipeline)
-                                    .handle((inbound, outbound) -> handleConnection((reactor.netty.Connection) inbound));
+                                    .handle(this::handle);
 
         return sslContext != null
                 ? server.secure(spec -> spec.sslContext(sslContext))
                 : server;
     }
+
 
     private LoopResources getLoopResources() {
         return loopResources != null
@@ -294,14 +298,14 @@ public class MqttServer {
         connection.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
 
         if (idleTimeout != null && !idleTimeout.isZero()) {
-            connection.addHandlerFirst("idleStateHandler",
-                                       new IdleStateHandler(0, 0, idleTimeout.toSeconds(), TimeUnit.SECONDS));
+            connection.addHandlerFirst("idleStateHandler", new IdleStateHandler(0, 0, idleTimeout.toSeconds(), TimeUnit.SECONDS));
         }
     }
 
-    private Mono<Void> handleConnection(Connection nettyConnection) {
-        return new DefaultMqttConnection(nettyConnection).run(this::invokeHandler);
+    private Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
+        return new DefaultMqttConnection(inbound, outbound).run(this::invokeHandler);
     }
+
 
     private Mono<Void> invokeHandler(MqttConnection mqttConnection) {
         if (connectionHandler == null) {

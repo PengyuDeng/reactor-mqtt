@@ -23,6 +23,7 @@ import io.netty.handler.codec.mqtt.MqttEncoder;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.timeout.IdleStateHandler;
 import reactor.core.publisher.Mono;
+import reactor.netty.Connection;
 import reactor.netty.DisposableServer;
 import reactor.netty.resources.LoopResources;
 import reactor.netty.tcp.TcpServer;
@@ -288,7 +289,7 @@ public class MqttServer {
                 : LoopResources.create("mqtt-", workerCount, true);
     }
 
-    private void initPipeline(reactor.netty.Connection connection) {
+    private void initPipeline(Connection connection) {
         connection.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
         connection.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
 
@@ -298,7 +299,7 @@ public class MqttServer {
         }
     }
 
-    private Mono<Void> handleConnection(reactor.netty.Connection nettyConnection) {
+    private Mono<Void> handleConnection(Connection nettyConnection) {
         return new DefaultMqttConnection(nettyConnection).run(this::invokeHandler);
     }
 

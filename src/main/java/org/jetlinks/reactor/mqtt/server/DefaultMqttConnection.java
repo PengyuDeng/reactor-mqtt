@@ -66,11 +66,11 @@ public class DefaultMqttConnection implements MqttConnection {
     private volatile MqttConnectMessage connectMessage;
 
     @SuppressWarnings("unused") // accessed via VarHandle
-    private final byte state = STATE_INIT;
+    private volatile byte state = STATE_INIT;
     @SuppressWarnings("unused") // accessed via VarHandle
     private volatile long lastPingTime;
     @SuppressWarnings("unused") // accessed via VarHandle
-    private final long keepAliveTimeoutMs = 120_000L;
+    private volatile long keepAliveTimeoutMs = 120_000L;
 
     private final Sinks.One<MqttConnectMessage> connectSink = Sinks.one();
     private final Sinks.Empty<Void> disposeSink = Sinks.empty();

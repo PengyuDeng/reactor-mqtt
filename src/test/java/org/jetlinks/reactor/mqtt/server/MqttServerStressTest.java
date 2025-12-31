@@ -13,14 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package server;
+package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
-import org.jetlinks.reactor.mqtt.server.*;
 import org.junit.jupiter.api.*;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;

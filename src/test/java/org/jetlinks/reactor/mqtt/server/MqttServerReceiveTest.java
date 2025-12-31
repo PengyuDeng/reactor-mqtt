@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.LongAdder;
 
 /**
  * MQTT 服务器接收测试 - 独立运行，监控每秒处理消息数
- *
+ * <p>
  * 使用方式：
  * 1. 运行 main 方法启动服务器
  * 2. 在另一台机器运行 MqttClientSendTest 发送消息
@@ -61,40 +61,40 @@ public class MqttServerReceiveTest {
 
         // 启动服务器
         DisposableServer server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .maxMessageSize(MAX_MESSAGE_SIZE)
-            .idleTimeout(Duration.ofSeconds(IDLE_TIMEOUT_SECONDS))
-            .handle(connection -> {
-                connectedClients.increment();
-                System.out.println("客户端连接: " + connection.getClientId() + " 来自 " + connection.getClientAddress());
+                                            .host(HOST)
+                                            .port(PORT)
+                                            .maxMessageSize(MAX_MESSAGE_SIZE)
+                                            .idleTimeout(Duration.ofSeconds(IDLE_TIMEOUT_SECONDS))
+                                            .handle(connection -> {
+                                                connectedClients.increment();
+                                                System.out.println("客户端连接: " + connection.getClientId() + " 来自 " + connection.getClientAddress());
 
-                return connection.listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        receivedMessages.increment();
-                        return Mono.empty();
-                    }
+                                                return connection.listener(new MqttMessageListener() {
+                                                    @Override
+                                                    public Mono<Void> onPublish(MqttPublishing message) {
+                                                        receivedMessages.increment();
+                                                        return Mono.empty();
+                                                    }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                                    @Override
+                                                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                                        return Mono.empty();
+                                                    }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                                    @Override
+                                                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                                        return Mono.empty();
+                                                    }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection conn) {
-                        connectedClients.decrement();
-                        System.out.println("客户端断开: " + conn.getClientId());
-                        return Mono.empty();
-                    }
-                }).accept();
-            })
-            .bindNow();
+                                                    @Override
+                                                    public Mono<Void> onDisconnect(MqttConnection conn) {
+                                                        connectedClients.decrement();
+                                                        System.out.println("客户端断开: " + conn.getClientId());
+                                                        return Mono.empty();
+                                                    }
+                                                }).accept();
+                                            })
+                                            .bindNow();
 
         System.out.println("服务器已启动: tcp://" + HOST + ":" + PORT + "\n");
 
@@ -130,11 +130,11 @@ public class MqttServerReceiveTest {
                     long avgQps = runningSeconds > 0 ? currentReceived / runningSeconds : qps;
 
                     System.out.printf("[%s] 接收: %,d/s | 峰值: %,d/s | 平均: %,d/s | 总接收: %,d | 客户端: %d%n",
-                        java.time.LocalTime.now().toString().substring(0, 8),
-                        qps, peakQps.get(), avgQps, currentReceived, clients);
+                                      java.time.LocalTime.now().toString().substring(0, 8),
+                                      qps, peakQps.get(), avgQps, currentReceived, clients);
                 } else if (clients > 0) {
                     System.out.printf("[%s] 等待消息... | 客户端: %d%n",
-                        java.time.LocalTime.now().toString().substring(0, 8), clients);
+                                      java.time.LocalTime.now().toString().substring(0, 8), clients);
                 }
             }
 

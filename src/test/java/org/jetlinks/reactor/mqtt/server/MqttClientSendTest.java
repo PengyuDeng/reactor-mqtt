@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.LongAdder;
 
 /**
  * MQTT 客户端发送测试 - 纯响应式实现
- *
+ * <p>
  * 使用方式：
  * 1. 修改 SERVER_HOST 为目标服务器 IP
  * 2. 运行 main 方法
@@ -82,7 +82,7 @@ public class MqttClientSendTest {
             if (timeDiff > 0 && startTime.get() > 0) {
                 long sendQps = (currentSent - lastSent.get()) * 1000 / timeDiff;
                 System.out.printf("  发送: %,d/s | 总发送: %,d | 客户端: %d%n",
-                    sendQps, currentSent, connectedClients.sum());
+                                  sendQps, currentSent, connectedClients.sum());
             }
 
             lastSent.set(currentSent);
@@ -120,45 +120,51 @@ public class MqttClientSendTest {
      */
     private static Mono<Void> createClient(String clientId) {
         return TcpClient.create()
-            .host(SERVER_HOST)
-            .port(SERVER_PORT)
-            .doOnConnected(conn -> {
-                // 添加 MQTT 编解码器
-                conn.addHandlerLast("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
-                conn.addHandlerLast("mqtt-encoder", MqttEncoder.INSTANCE);
-            })
-            .handle((inbound, outbound) -> {
-                // 构建 CONNECT 消息
-                MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
-                    .clientId(clientId)
-                    .cleanSession(true)
-                    .keepAlive(300)
-                    .build();
+                        .host(SERVER_HOST)
+                        .port(SERVER_PORT)
+                        .doOnConnected(conn -> {
+                            // 添加 MQTT 编解码器
+                            conn.addHandlerLast("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
+                            conn.addHandlerLast("mqtt-encoder", MqttEncoder.INSTANCE);
+                        })
+                        .handle((inbound, outbound) -> {
+                            // 构建 CONNECT 消息
+                            MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
+                                                                                   .clientId(clientId)
+                                                                                   .cleanSession(true)
+                                                                                   .keepAlive(300)
+                                                                                   .build();
 
-                // 发送 CONNECT 并等待 CONNACK
-                return outbound.sendObject(Mono.just(connectMessage))
-                    .then(inbound.receiveObject()
-                        .cast(MqttMessage.class)
-                        .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
-                        .next()
-                        .timeout(java.time.Duration.ofSeconds(10))
-                        .flatMap(connAck -> {
-                            MqttConnAckMessage ack = (MqttConnAckMessage) connAck;
-                            if (ack.variableHeader().connectReturnCode() != MqttConnectReturnCode.CONNECTION_ACCEPTED) {
-                                return Mono.error(new RuntimeException("连接被拒绝: " + ack.variableHeader().connectReturnCode()));
-                            }
-                            System.out.println("客户端连接成功: " + clientId);
-                            connectedClients.increment();
+                            // 发送 CONNECT 并等待 CONNACK
+                            return outbound.sendObject(Mono.just(connectMessage))
+                                           .then(inbound.receiveObject()
+                                                        .cast(MqttMessage.class)
+                                                        .filter(msg -> msg
+                                                                .fixedHeader()
+                                                                .messageType() == MqttMessageType.CONNACK)
+                                                        .next()
+                                                        .timeout(java.time.Duration.ofSeconds(10))
+                                                        .flatMap(connAck -> {
+                                                            MqttConnAckMessage ack = (MqttConnAckMessage) connAck;
+                                                            if (ack
+                                                                    .variableHeader()
+                                                                    .connectReturnCode() != MqttConnectReturnCode.CONNECTION_ACCEPTED) {
+                                                                return Mono.error(new RuntimeException("连接被拒绝: " + ack
+                                                                        .variableHeader()
+                                                                        .connectReturnCode()));
+                                                            }
+                                                            System.out.println("客户端连接成功: " + clientId);
+                                                            connectedClients.increment();
 
-                            // 开始发送消息
-                            return sendMessages(outbound, clientId)
-                                .doFinally(signal -> connectedClients.decrement());
-                        }));
-            })
-            .connect()
-            .doOnError(e -> System.out.println("客户端 " + clientId + " 连接失败: " + e.getMessage()))
-            .flatMap(conn -> conn.onDispose())
-            .onErrorResume(e -> Mono.empty());
+                                                            // 开始发送消息
+                                                            return sendMessages(outbound, clientId)
+                                                                    .doFinally(signal -> connectedClients.decrement());
+                                                        }));
+                        })
+                        .connect()
+                        .doOnError(e -> System.out.println("客户端 " + clientId + " 连接失败: " + e.getMessage()))
+                        .flatMap(conn -> conn.onDispose())
+                        .onErrorResume(e -> Mono.empty());
     }
 
     /**
@@ -168,16 +174,16 @@ public class MqttClientSendTest {
         long endTime = System.currentTimeMillis() + (TEST_DURATION_SECONDS * 1000L);
 
         return Flux.generate(sink -> {
-                if (System.currentTimeMillis() < endTime) {
-                    sink.next(buildPublishMessage());
-                } else {
-                    sink.complete();
-                }
-            })
-            .cast(MqttPublishMessage.class)
-            .flatMap(msg -> outbound.sendObject(Mono.just(msg))
-                .then(Mono.fromRunnable(sentCount::increment)), 256)
-            .then();
+                       if (System.currentTimeMillis() < endTime) {
+                           sink.next(buildPublishMessage());
+                       } else {
+                           sink.complete();
+                       }
+                   })
+                   .cast(MqttPublishMessage.class)
+                   .flatMap(msg -> outbound.sendObject(Mono.just(msg))
+                                           .then(Mono.fromRunnable(sentCount::increment)), 256)
+                   .then();
     }
 
     /**
@@ -192,16 +198,16 @@ public class MqttClientSendTest {
         ByteBuf payload = Unpooled.wrappedBuffer(PAYLOAD);
 
         MqttFixedHeader fixedHeader = new MqttFixedHeader(
-            MqttMessageType.PUBLISH,
-            false,
-            QOS,
-            false,
-            0
+                MqttMessageType.PUBLISH,
+                false,
+                QOS,
+                false,
+                0
         );
 
         MqttPublishVariableHeader variableHeader = new MqttPublishVariableHeader(
-            TOPIC,
-            messageId
+                TOPIC,
+                messageId
         );
 
         return new MqttPublishMessage(fixedHeader, variableHeader, payload);

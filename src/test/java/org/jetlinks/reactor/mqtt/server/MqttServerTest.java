@@ -73,53 +73,53 @@ class MqttServerTest {
         Sinks.One<Connection> connectionSink = Sinks.one();
 
         TcpClient.create()
-            .host(HOST)
-            .port(PORT)
-            .doOnConnected(c -> {
-                c.addHandlerFirst("mqtt-encoder", MqttEncoder.INSTANCE);
-                c.addHandlerFirst("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
-            })
-            .handle((inbound, outbound) -> {
-                MqttMessageBuilders.ConnectBuilder connectBuilder = MqttMessageBuilders.connect()
-                    .clientId(clientId)
-                    .cleanSession(true)
-                    .keepAlive(300);
+                 .host(HOST)
+                 .port(PORT)
+                 .doOnConnected(c -> {
+                     c.addHandlerFirst("mqtt-encoder", MqttEncoder.INSTANCE);
+                     c.addHandlerFirst("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
+                 })
+                 .handle((inbound, outbound) -> {
+                     MqttMessageBuilders.ConnectBuilder connectBuilder = MqttMessageBuilders.connect()
+                                                                                            .clientId(clientId)
+                                                                                            .cleanSession(true)
+                                                                                            .keepAlive(300);
 
-                if (username != null) {
-                    connectBuilder.username(username);
-                }
-                if (password != null) {
-                    connectBuilder.password(password.getBytes(StandardCharsets.UTF_8));
-                }
+                     if (username != null) {
+                         connectBuilder.username(username);
+                     }
+                     if (password != null) {
+                         connectBuilder.password(password.getBytes(StandardCharsets.UTF_8));
+                     }
 
-                MqttConnectMessage connectMessage = connectBuilder.build();
+                     MqttConnectMessage connectMessage = connectBuilder.build();
 
-                // 监听 CONNACK
-                inbound.receiveObject()
-                    .cast(MqttMessage.class)
-                    .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
-                    .next()
-                    .subscribe(msg -> {
-                        MqttConnAckMessage connAck = (MqttConnAckMessage) msg;
-                        if (connAck.variableHeader().connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
-                            // 获取底层 Connection
-                            if (inbound instanceof Connection) {
-                                connectionSink.tryEmitValue((Connection) inbound);
-                            }
-                        } else {
-                            connectionSink.tryEmitError(new RuntimeException("连接被拒绝: " + connAck.variableHeader().connectReturnCode()));
-                        }
-                    });
+                     // 监听 CONNACK
+                     inbound.receiveObject()
+                            .cast(MqttMessage.class)
+                            .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
+                            .next()
+                            .subscribe(msg -> {
+                                MqttConnAckMessage connAck = (MqttConnAckMessage) msg;
+                                if (connAck
+                                        .variableHeader()
+                                        .connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
+                                    // 获取底层 Connection
+                                    if (inbound instanceof Connection) {
+                                        connectionSink.tryEmitValue((Connection) inbound);
+                                    }
+                                } else {
+                                    connectionSink.tryEmitError(new RuntimeException("连接被拒绝: " + connAck
+                                            .variableHeader()
+                                            .connectReturnCode()));
+                                }
+                            });
 
-                // 发送 CONNECT
-                return outbound.sendObject(Mono.just(connectMessage))
-                    .then(Mono.never());
-            })
-            .connect()
-            .subscribe(conn -> {
-                // 连接建立，等待 CONNACK
-                connectionSink.tryEmitValue(conn);
-            });
+                     // 发送 CONNECT
+                     return outbound.sendObject(Mono.just(connectMessage))
+                                    .then(Mono.never());
+                 })
+                 .connectNow(); // 使用 connectNow() 同步连接，避免连接池问题
 
         return connectionSink.asMono().timeout(TIMEOUT);
     }
@@ -128,31 +128,37 @@ class MqttServerTest {
      * 响应式尝试连接并返回 CONNACK
      */
     private Mono<MqttConnAckMessage> tryConnect(String clientId) {
+        Sinks.One<MqttConnAckMessage> connAckSink = Sinks.one();
+
         return TcpClient.create()
-            .host(HOST)
-            .port(PORT)
-            .doOnConnected(c -> {
-                c.addHandlerLast("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
-                c.addHandlerLast("mqtt-encoder", MqttEncoder.INSTANCE);
-            })
-            .connect()
-            .flatMap(conn -> {
-                clientConnection = conn;
+                        .host(HOST)
+                        .port(PORT)
+                        .doOnConnected(c -> {
+                            c.addHandlerFirst("mqtt-encoder", MqttEncoder.INSTANCE);
+                            c.addHandlerFirst("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
+                        })
+                        .handle((inbound, outbound) -> {
+                            MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
+                                                                                   .clientId(clientId)
+                                                                                   .cleanSession(true)
+                                                                                   .keepAlive(300)
+                                                                                   .build();
 
-                MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
-                    .clientId(clientId)
-                    .cleanSession(true)
-                    .keepAlive(300)
-                    .build();
+                            // 监听 CONNACK
+                            inbound.receiveObject()
+                                   .cast(MqttMessage.class)
+                                   .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
+                                   .next()
+                                   .cast(MqttConnAckMessage.class)
+                                   .subscribe(connAckSink::tryEmitValue, connAckSink::tryEmitError);
 
-                return conn.outbound().sendObject(Mono.just(connectMessage)).then()
-                    .then(conn.inbound().receiveObject()
-                        .cast(MqttMessage.class)
-                        .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
-                        .next()
-                        .timeout(TIMEOUT)
-                        .cast(MqttConnAckMessage.class));
-            });
+                            // 发送 CONNECT，然后等待
+                            return outbound.sendObject(Mono.just(connectMessage))
+                                           .then(Mono.never());
+                        })
+                        .connect()
+                        .doOnNext(conn -> clientConnection = conn)
+                        .then(connAckSink.asMono().timeout(TIMEOUT));
     }
 
     /**
@@ -167,9 +173,9 @@ class MqttServerTest {
         ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload.getBytes(StandardCharsets.UTF_8));
 
         MqttPublishMessage publishMessage = new MqttPublishMessage(
-            new MqttFixedHeader(MqttMessageType.PUBLISH, false, qos, false, 0),
-            new MqttPublishVariableHeader(topic, messageId),
-            payloadBuf
+                new MqttFixedHeader(MqttMessageType.PUBLISH, false, qos, false, 0),
+                new MqttPublishVariableHeader(topic, messageId),
+                payloadBuf
         );
 
         return conn.outbound().sendObject(Mono.just(publishMessage)).then();
@@ -185,9 +191,9 @@ class MqttServerTest {
         }
 
         MqttSubscribeMessage subscribeMessage = MqttMessageBuilders.subscribe()
-            .messageId(messageId)
-            .addSubscription(qos, topic)
-            .build();
+                                                                   .messageId(messageId)
+                                                                   .addSubscription(qos, topic)
+                                                                   .build();
 
         return conn.outbound().sendObject(Mono.just(subscribeMessage)).then();
     }
@@ -202,9 +208,9 @@ class MqttServerTest {
         }
 
         MqttUnsubscribeMessage unsubscribeMessage = MqttMessageBuilders.unsubscribe()
-            .messageId(messageId)
-            .addTopicFilter(topic)
-            .build();
+                                                                       .messageId(messageId)
+                                                                       .addTopicFilter(topic)
+                                                                       .build();
 
         return conn.outbound().sendObject(Mono.just(unsubscribeMessage)).then();
     }
@@ -214,10 +220,10 @@ class MqttServerTest {
      */
     private Mono<Void> disconnect(Connection conn) {
         MqttMessage disconnectMessage = new MqttMessage(
-            new MqttFixedHeader(MqttMessageType.DISCONNECT, false, MqttQoS.AT_MOST_ONCE, false, 0)
+                new MqttFixedHeader(MqttMessageType.DISCONNECT, false, MqttQoS.AT_MOST_ONCE, false, 0)
         );
         return conn.outbound().sendObject(Mono.just(disconnectMessage)).then()
-            .doFinally(signal -> conn.dispose());
+                   .doFinally(signal -> conn.dispose());
     }
 
     // ==================== 配置验证测试 ====================
@@ -240,7 +246,7 @@ class MqttServerTest {
     @Test
     void testIdleTimeoutValidation() {
         assertThrows(IllegalArgumentException.class, () ->
-            MqttServer.create().idleTimeout(Duration.ofSeconds(-1)));
+                MqttServer.create().idleTimeout(Duration.ofSeconds(-1)));
         assertDoesNotThrow(() -> MqttServer.create().idleTimeout(null));
         assertDoesNotThrow(() -> MqttServer.create().idleTimeout(Duration.ZERO));
     }
@@ -262,11 +268,11 @@ class MqttServerTest {
     @Test
     void testWriteBufferWaterMarkValidation() {
         assertThrows(IllegalArgumentException.class, () ->
-            MqttServer.create().writeBufferWaterMark(0, 100));
+                MqttServer.create().writeBufferWaterMark(0, 100));
         assertThrows(IllegalArgumentException.class, () ->
-            MqttServer.create().writeBufferWaterMark(100, 0));
+                MqttServer.create().writeBufferWaterMark(100, 0));
         assertThrows(IllegalArgumentException.class, () ->
-            MqttServer.create().writeBufferWaterMark(100, 50)); // low > high
+                MqttServer.create().writeBufferWaterMark(100, 50)); // low > high
         assertDoesNotThrow(() -> MqttServer.create().writeBufferWaterMark(50, 100));
         assertDoesNotThrow(() -> MqttServer.create().writeBufferWaterMark(100, 100)); // low == high
     }
@@ -286,18 +292,18 @@ class MqttServerTest {
         Sinks.One<String> clientIdSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> {
-                clientIdSink.tryEmitValue(connection.getClientId());
-                return connection.listener(new NoOpListener()).accept();
-            })
-            .bindNow();
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> {
+                               clientIdSink.tryEmitValue(connection.getClientId());
+                               return connection.listener(new NoOpListener()).accept();
+                           })
+                           .bindNow();
 
         String clientId = createAndConnectClient("test-client-1")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .then(clientIdSink.asMono())
-            .block(TIMEOUT);
+                .doOnSuccess(conn -> clientConnection = conn)
+                .then(clientIdSink.asMono())
+                .block(TIMEOUT);
 
         assertEquals("test-client-1", clientId);
 
@@ -309,15 +315,15 @@ class MqttServerTest {
     @Test
     void testClientReject() {
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD))
-            .bindNow();
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD))
+                           .bindNow();
 
         MqttConnAckMessage connAck = tryConnect("test-client").block(TIMEOUT);
 
         assertEquals(MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD,
-            connAck.variableHeader().connectReturnCode());
+                     connAck.variableHeader().connectReturnCode());
     }
 
     @Test
@@ -325,18 +331,18 @@ class MqttServerTest {
         Sinks.One<MqttAuth> authSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> {
-                authSink.tryEmitValue(connection.getAuth());
-                return connection.listener(new NoOpListener()).accept();
-            })
-            .bindNow();
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> {
+                               authSink.tryEmitValue(connection.getAuth());
+                               return connection.listener(new NoOpListener()).accept();
+                           })
+                           .bindNow();
 
         MqttAuth auth = createAndConnectClient("test-client", "testuser", "testpass")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .then(authSink.asMono())
-            .block(TIMEOUT);
+                .doOnSuccess(conn -> clientConnection = conn)
+                .then(authSink.asMono())
+                .block(TIMEOUT);
 
         assertEquals("testuser", auth.getUsername());
         assertEquals("testpass", auth.getPassword());
@@ -353,42 +359,43 @@ class MqttServerTest {
         Sinks.One<MqttPublishing> messageSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection.listener(new MqttMessageListener() {
-                @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
-                    messageSink.tryEmitValue(message);
-                    return Mono.empty();
-                }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection.listener(new MqttMessageListener() {
+                               @Override
+                               public Mono<Void> onPublish(MqttPublishing message) {
+                                   messageSink.tryEmitValue(message);
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
-                    return Mono.empty();
-                }
-            }).accept())
-            .bindNow();
+                               @Override
+                               public Mono<Void> onDisconnect(MqttConnection connection) {
+                                   return Mono.empty();
+                               }
+                           }).accept())
+                           .bindNow();
 
         AtomicInteger messageIdGen = new AtomicInteger(1);
 
-        MqttPublishing msg = createAndConnectClient("test-client")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .flatMap(conn -> publish(conn, "test/topic", "hello", MqttQoS.AT_MOST_ONCE, messageIdGen))
-            .then(messageSink.asMono())
-            .block(TIMEOUT);
+        createAndConnectClient("test-client")
+                .doOnSuccess(conn -> clientConnection = conn)
+                .flatMap(conn -> publish(conn, "test/topic", "hello", MqttQoS.AT_MOST_ONCE, messageIdGen))
+                .then(messageSink.asMono())
+                .doOnSuccess(msg -> {
+                    assertEquals("test/topic", msg.getTopic());
+                    assertEquals("hello", msg.getPayload().toString(StandardCharsets.UTF_8));
+                });
 
-        assertEquals("test/topic", msg.getTopic());
-        assertEquals("hello", msg.getPayload().toString(StandardCharsets.UTF_8));
 
         if (clientConnection != null) {
             disconnect(clientConnection).block(TIMEOUT);
@@ -400,41 +407,40 @@ class MqttServerTest {
         Sinks.One<Integer> qosSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection.listener(new MqttMessageListener() {
-                @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
-                    qosSink.tryEmitValue(message.getQosLevel());
-                    return Mono.empty();
-                }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection.listener(new MqttMessageListener() {
+                               @Override
+                               public Mono<Void> onPublish(MqttPublishing message) {
+                                   qosSink.tryEmitValue(message.getQosLevel());
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
-                    return Mono.empty();
-                }
-            }).accept())
-            .bindNow();
+                               @Override
+                               public Mono<Void> onDisconnect(MqttConnection connection) {
+                                   return Mono.empty();
+                               }
+                           }).accept())
+                           .bindNow();
 
         AtomicInteger messageIdGen = new AtomicInteger(1);
 
-        Integer qos = createAndConnectClient("test-client")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .flatMap(conn -> publish(conn, "test/topic", "hello", MqttQoS.AT_LEAST_ONCE, messageIdGen))
-            .then(qosSink.asMono())
-            .block(TIMEOUT);
+        createAndConnectClient("test-client")
+                .doOnSuccess(conn -> clientConnection = conn)
+                .flatMap(conn -> publish(conn, "test/topic", "hello", MqttQoS.AT_LEAST_ONCE, messageIdGen))
+                .then(qosSink.asMono())
+                .doOnSuccess(qos -> assertEquals(1, qos));
 
-        assertEquals(1, qos);
 
         if (clientConnection != null) {
             disconnect(clientConnection).block(TIMEOUT);
@@ -446,39 +452,39 @@ class MqttServerTest {
         Sinks.One<Integer> qosSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection.listener(new MqttMessageListener() {
-                @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
-                    qosSink.tryEmitValue(message.getQosLevel());
-                    return Mono.empty();
-                }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection.listener(new MqttMessageListener() {
+                               @Override
+                               public Mono<Void> onPublish(MqttPublishing message) {
+                                   qosSink.tryEmitValue(message.getQosLevel());
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
-                    return Mono.empty();
-                }
-            }).accept())
-            .bindNow();
+                               @Override
+                               public Mono<Void> onDisconnect(MqttConnection connection) {
+                                   return Mono.empty();
+                               }
+                           }).accept())
+                           .bindNow();
 
         AtomicInteger messageIdGen = new AtomicInteger(1);
 
         Integer qos = createAndConnectClient("test-client")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .flatMap(conn -> publish(conn, "test/topic", "hello", MqttQoS.EXACTLY_ONCE, messageIdGen))
-            .then(qosSink.asMono())
-            .block(TIMEOUT);
+                .doOnSuccess(conn -> clientConnection = conn)
+                .flatMap(conn -> publish(conn, "test/topic", "hello", MqttQoS.EXACTLY_ONCE, messageIdGen))
+                .then(qosSink.asMono())
+                .block(TIMEOUT);
 
         assertEquals(2, qos);
 
@@ -494,39 +500,39 @@ class MqttServerTest {
         Sinks.One<Boolean> subscribedSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection.listener(new MqttMessageListener() {
-                @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
-                    return Mono.empty();
-                }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection.listener(new MqttMessageListener() {
+                               @Override
+                               public Mono<Void> onPublish(MqttPublishing message) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                    subscribedSink.tryEmitValue(true);
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                   subscribedSink.tryEmitValue(true);
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
-                    return Mono.empty();
-                }
-            }).accept())
-            .bindNow();
+                               @Override
+                               public Mono<Void> onDisconnect(MqttConnection connection) {
+                                   return Mono.empty();
+                               }
+                           }).accept())
+                           .bindNow();
 
         AtomicInteger messageIdGen = new AtomicInteger(1);
 
         Boolean subscribed = createAndConnectClient("test-client")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .flatMap(conn -> subscribe(conn, "test/#", MqttQoS.AT_LEAST_ONCE, messageIdGen))
-            .then(subscribedSink.asMono())
-            .block(TIMEOUT);
+                .doOnSuccess(conn -> clientConnection = conn)
+                .flatMap(conn -> subscribe(conn, "test/#", MqttQoS.AT_LEAST_ONCE, messageIdGen))
+                .then(subscribedSink.asMono())
+                .block(TIMEOUT);
 
         assertTrue(subscribed);
 
@@ -541,42 +547,42 @@ class MqttServerTest {
         Sinks.One<Boolean> unsubscribedSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection.listener(new MqttMessageListener() {
-                @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
-                    return Mono.empty();
-                }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection.listener(new MqttMessageListener() {
+                               @Override
+                               public Mono<Void> onPublish(MqttPublishing message) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                    subscribedSink.tryEmitValue(true);
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                   subscribedSink.tryEmitValue(true);
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                    unsubscribedSink.tryEmitValue(true);
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                   unsubscribedSink.tryEmitValue(true);
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
-                    return Mono.empty();
-                }
-            }).accept())
-            .bindNow();
+                               @Override
+                               public Mono<Void> onDisconnect(MqttConnection connection) {
+                                   return Mono.empty();
+                               }
+                           }).accept())
+                           .bindNow();
 
         AtomicInteger messageIdGen = new AtomicInteger(1);
 
         Boolean unsubscribed = createAndConnectClient("test-client")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .flatMap(conn -> subscribe(conn, "test/#", MqttQoS.AT_LEAST_ONCE, messageIdGen)
-                .then(subscribedSink.asMono())
-                .then(unsubscribe(conn, "test/#", messageIdGen)))
-            .then(unsubscribedSink.asMono())
-            .block(TIMEOUT);
+                .doOnSuccess(conn -> clientConnection = conn)
+                .flatMap(conn -> subscribe(conn, "test/#", MqttQoS.AT_LEAST_ONCE, messageIdGen)
+                        .then(subscribedSink.asMono())
+                        .then(unsubscribe(conn, "test/#", messageIdGen)))
+                .then(unsubscribedSink.asMono())
+                .block(TIMEOUT);
 
         assertTrue(unsubscribed);
 
@@ -593,43 +599,43 @@ class MqttServerTest {
         Sinks.One<Boolean> disconnectedSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> {
-                connectedSink.tryEmitValue(true);
-                return connection.listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        return Mono.empty();
-                    }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> {
+                               connectedSink.tryEmitValue(true);
+                               return connection.listener(new MqttMessageListener() {
+                                   @Override
+                                   public Mono<Void> onPublish(MqttPublishing message) {
+                                       return Mono.empty();
+                                   }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                   @Override
+                                   public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                       return Mono.empty();
+                                   }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                   @Override
+                                   public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                       return Mono.empty();
+                                   }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection conn) {
-                        disconnectedSink.tryEmitValue(true);
-                        return Mono.empty();
-                    }
-                }).accept();
-            })
-            .bindNow();
+                                   @Override
+                                   public Mono<Void> onDisconnect(MqttConnection conn) {
+                                       disconnectedSink.tryEmitValue(true);
+                                       return Mono.empty();
+                                   }
+                               }).accept();
+                           })
+                           .bindNow();
 
         Boolean disconnected = createAndConnectClient("test-client")
-            .flatMap(conn -> {
-                clientConnection = conn;
-                return connectedSink.asMono()
-                    .then(disconnect(conn))
-                    .then(disconnectedSink.asMono());
-            })
-            .block(TIMEOUT);
+                .flatMap(conn -> {
+                    clientConnection = conn;
+                    return connectedSink.asMono()
+                                        .then(disconnect(conn))
+                                        .then(disconnectedSink.asMono());
+                })
+                .block(TIMEOUT);
 
         assertTrue(disconnected);
     }
@@ -643,44 +649,44 @@ class MqttServerTest {
         Sinks.One<Integer> completeSink = Sinks.one();
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection.listener(new MqttMessageListener() {
-                @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
-                    int count = messageCount.incrementAndGet();
-                    if (count >= expectedCount) {
-                        completeSink.tryEmitValue(count);
-                    }
-                    return Mono.empty();
-                }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection.listener(new MqttMessageListener() {
+                               @Override
+                               public Mono<Void> onPublish(MqttPublishing message) {
+                                   int count = messageCount.incrementAndGet();
+                                   if (count >= expectedCount) {
+                                       completeSink.tryEmitValue(count);
+                                   }
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                    return Mono.empty();
-                }
+                               @Override
+                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                   return Mono.empty();
+                               }
 
-                @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
-                    return Mono.empty();
-                }
-            }).accept())
-            .bindNow();
+                               @Override
+                               public Mono<Void> onDisconnect(MqttConnection connection) {
+                                   return Mono.empty();
+                               }
+                           }).accept())
+                           .bindNow();
 
         AtomicInteger messageIdGen = new AtomicInteger(1);
 
         Integer count = createAndConnectClient("test-client")
-            .doOnSuccess(conn -> clientConnection = conn)
-            .flatMap(conn -> Flux.range(0, expectedCount)
-                .flatMap(i -> publish(conn, "test/topic", "msg-" + i, MqttQoS.AT_LEAST_ONCE, messageIdGen))
-                .then())
-            .then(completeSink.asMono())
-            .block(TIMEOUT);
+                .doOnSuccess(conn -> clientConnection = conn)
+                .flatMap(conn -> Flux.range(0, expectedCount)
+                                     .flatMap(i -> publish(conn, "test/topic", "msg-" + i, MqttQoS.AT_LEAST_ONCE, messageIdGen))
+                                     .then())
+                .then(completeSink.asMono())
+                .block(TIMEOUT);
 
         assertEquals(expectedCount, count);
 

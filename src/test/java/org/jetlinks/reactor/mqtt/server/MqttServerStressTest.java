@@ -55,41 +55,41 @@ class MqttServerStressTest {
         connectedClients.set(0);
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .maxMessageSize(MAX_MESSAGE_SIZE)
-            .idleTimeout(Duration.ofSeconds(60))
-            .handle(connection -> {
-                connectedClients.incrementAndGet();
+                           .host(HOST)
+                           .port(PORT)
+                           .maxMessageSize(MAX_MESSAGE_SIZE)
+                           .idleTimeout(Duration.ofSeconds(60))
+                           .handle(connection -> {
+                               connectedClients.incrementAndGet();
 
-                connection.onDispose()
-                    .doOnSuccess(v -> connectedClients.decrementAndGet())
-                    .subscribe();
+                               connection.onDispose()
+                                         .doOnSuccess(v -> connectedClients.decrementAndGet())
+                                         .subscribe();
 
-                return connection.listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        receivedMessages.incrementAndGet();
-                        return Mono.empty();
-                    }
+                               return connection.listener(new MqttMessageListener() {
+                                   @Override
+                                   public Mono<Void> onPublish(MqttPublishing message) {
+                                       receivedMessages.incrementAndGet();
+                                       return Mono.empty();
+                                   }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                   @Override
+                                   public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                       return Mono.empty();
+                                   }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                   @Override
+                                   public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                       return Mono.empty();
+                                   }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection conn) {
-                        return Mono.empty();
-                    }
-                }).accept();
-            })
-            .bindNow();
+                                   @Override
+                                   public Mono<Void> onDisconnect(MqttConnection conn) {
+                                       return Mono.empty();
+                                   }
+                               }).accept();
+                           })
+                           .bindNow();
 
         System.out.println("MQTT 服务器已启动: tcp://" + HOST + ":" + PORT);
     }
@@ -106,36 +106,46 @@ class MqttServerStressTest {
      * 响应式创建客户端连接
      */
     private Mono<Connection> createClient(String clientId) {
-        return TcpClient.create()
-            .host(HOST)
-            .port(PORT)
-            .doOnConnected(c -> {
-                c.addHandlerLast("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
-                c.addHandlerLast("mqtt-encoder", MqttEncoder.INSTANCE);
-            })
-            .connect()
-            .flatMap(conn -> {
-                MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
-                    .clientId(clientId)
-                    .cleanSession(true)
-                    .keepAlive(300)
-                    .build();
+        Sinks.One<Connection> connectionSink = Sinks.one();
 
-                return conn.outbound().sendObject(Mono.just(connectMessage)).then()
-                    .then(conn.inbound().receiveObject()
-                        .cast(MqttMessage.class)
-                        .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
-                        .next()
-                        .timeout(Duration.ofSeconds(10))
-                        .flatMap(msg -> {
-                            MqttConnAckMessage connAck = (MqttConnAckMessage) msg;
-                            if (connAck.variableHeader().connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
-                                return Mono.just(conn);
-                            } else {
-                                return Mono.error(new RuntimeException("连接被拒绝"));
-                            }
-                        }));
-            });
+        return TcpClient.create()
+                        .host(HOST)
+                        .port(PORT)
+                        .doOnConnected(c -> {
+                            c.addHandlerFirst("mqtt-encoder", MqttEncoder.INSTANCE);
+                            c.addHandlerFirst("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
+                        })
+                        .handle((inbound, outbound) -> {
+                            MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
+                                                                                   .clientId(clientId)
+                                                                                   .cleanSession(true)
+                                                                                   .keepAlive(300)
+                                                                                   .build();
+
+                            // 监听 CONNACK
+                            inbound.receiveObject()
+                                   .cast(MqttMessage.class)
+                                   .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
+                                   .next()
+                                   .subscribe(msg -> {
+                                       MqttConnAckMessage connAck = (MqttConnAckMessage) msg;
+                                       if (connAck
+                                               .variableHeader()
+                                               .connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
+                                           if (inbound instanceof Connection) {
+                                               connectionSink.tryEmitValue((Connection) inbound);
+                                           }
+                                       } else {
+                                           connectionSink.tryEmitError(new RuntimeException("连接被拒绝"));
+                                       }
+                                   });
+
+                            // 发送 CONNECT
+                            return outbound.sendObject(Mono.just(connectMessage))
+                                           .then(Mono.never());
+                        })
+                        .connect()
+                        .then(connectionSink.asMono().timeout(Duration.ofSeconds(10)));
     }
 
     /**
@@ -149,9 +159,9 @@ class MqttServerStressTest {
 
         ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
         MqttPublishMessage publishMessage = new MqttPublishMessage(
-            new MqttFixedHeader(MqttMessageType.PUBLISH, false, qos, false, 0),
-            new MqttPublishVariableHeader(topic, messageId),
-            payloadBuf
+                new MqttFixedHeader(MqttMessageType.PUBLISH, false, qos, false, 0),
+                new MqttPublishVariableHeader(topic, messageId),
+                payloadBuf
         );
 
         return conn.outbound().sendObject(Mono.just(publishMessage)).then();
@@ -162,10 +172,10 @@ class MqttServerStressTest {
      */
     private Mono<Void> disconnect(Connection conn) {
         MqttMessage disconnectMessage = new MqttMessage(
-            new MqttFixedHeader(MqttMessageType.DISCONNECT, false, MqttQoS.AT_MOST_ONCE, false, 0)
+                new MqttFixedHeader(MqttMessageType.DISCONNECT, false, MqttQoS.AT_MOST_ONCE, false, 0)
         );
         return conn.outbound().sendObject(Mono.just(disconnectMessage)).then()
-            .doFinally(signal -> conn.dispose());
+                   .doFinally(signal -> conn.dispose());
     }
 
     /**
@@ -183,14 +193,14 @@ class MqttServerStressTest {
         // 并发创建客户端
         Flux.range(0, clientCount)
             .flatMap(i -> createClient("stress-conn-" + i)
-                .doOnSuccess(conn -> {
-                    clients.add(conn);
-                    successCount.incrementAndGet();
-                })
-                .onErrorResume(e -> {
-                    failCount.incrementAndGet();
-                    return Mono.empty();
-                }), 20) // 并发度 20
+                    .doOnSuccess(conn -> {
+                        clients.add(conn);
+                        successCount.incrementAndGet();
+                    })
+                    .onErrorResume(e -> {
+                        failCount.incrementAndGet();
+                        return Mono.empty();
+                    }), 20) // 并发度 20
             .blockLast(Duration.ofSeconds(60));
 
         long elapsed = System.currentTimeMillis() - startTime;
@@ -224,13 +234,13 @@ class MqttServerStressTest {
         long startTime = System.currentTimeMillis();
 
         createClient("stress-throughput")
-            .flatMap(conn -> Flux.range(0, messageCount)
-                .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen), 256)
-                .then()
-                .delayElement(Duration.ofSeconds(2)) // 等待服务器处理
-                .then(disconnect(conn))
-                .thenReturn(conn))
-            .block(TIMEOUT);
+                .flatMap(conn -> Flux.range(0, messageCount)
+                                     .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen), 256)
+                                     .then()
+                                     .delayElement(Duration.ofSeconds(2)) // 等待服务器处理
+                                     .then(disconnect(conn))
+                                     .thenReturn(conn))
+                .block(TIMEOUT);
 
         long elapsed = System.currentTimeMillis() - startTime;
 
@@ -259,8 +269,8 @@ class MqttServerStressTest {
         // 连接客户端
         Flux.range(0, clientCount)
             .flatMap(i -> createClient("stress-pub-" + i)
-                .doOnSuccess(clients::add)
-                .onErrorResume(e -> Mono.empty()), 20)
+                    .doOnSuccess(clients::add)
+                    .onErrorResume(e -> Mono.empty()), 20)
             .blockLast(Duration.ofSeconds(10));
 
         assertEquals(clientCount, clients.size());
@@ -272,8 +282,8 @@ class MqttServerStressTest {
             .flatMap(conn -> {
                 AtomicInteger messageIdGen = new AtomicInteger(1);
                 return Flux.range(0, messagesPerClient)
-                    .flatMap(j -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen), 64)
-                    .then();
+                           .flatMap(j -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen), 64)
+                           .then();
             }, clientCount)
             .then(Mono.delay(Duration.ofSeconds(2))) // 等待服务器处理
             .block(Duration.ofSeconds(60));
@@ -308,14 +318,17 @@ class MqttServerStressTest {
 
         long startTime = System.currentTimeMillis();
 
-        createClient("stress-qos1")
-            .flatMap(conn -> Flux.range(0, messageCount)
-                .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_LEAST_ONCE, messageIdGen), 64)
-                .then()
-                .delayElement(Duration.ofSeconds(2))
-                .then(disconnect(conn))
-                .thenReturn(conn))
-            .block(TIMEOUT);
+        Connection conn = createClient("stress-qos1").block(TIMEOUT);
+
+        // 同步发送所有消息
+        Flux.range(0, messageCount)
+            .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_LEAST_ONCE, messageIdGen), 64)
+            .blockLast(TIMEOUT);
+
+        // 等待服务器处理
+        Mono.delay(Duration.ofSeconds(2)).block();
+
+        disconnect(conn).block(TIMEOUT);
 
         long elapsed = System.currentTimeMillis() - startTime;
 
@@ -343,8 +356,8 @@ class MqttServerStressTest {
         // 连接客户端
         Flux.range(0, clientCount)
             .flatMap(i -> createClient("stress-sustained-" + i)
-                .doOnSuccess(clients::add)
-                .onErrorResume(e -> Mono.empty()), 10)
+                    .doOnSuccess(clients::add)
+                    .onErrorResume(e -> Mono.empty()), 10)
             .blockLast(Duration.ofSeconds(10));
 
         long endTime = System.currentTimeMillis() + (durationSeconds * 1000L);
@@ -354,15 +367,15 @@ class MqttServerStressTest {
             .flatMap(conn -> {
                 AtomicInteger messageIdGen = new AtomicInteger(1);
                 return Flux.generate(sink -> {
-                        if (System.currentTimeMillis() < endTime) {
-                            sink.next(1);
-                        } else {
-                            sink.complete();
-                        }
-                    })
-                    .flatMap(x -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen)
-                        .doOnSuccess(v -> sentCount.incrementAndGet()), 128)
-                    .then();
+                               if (System.currentTimeMillis() < endTime) {
+                                   sink.next(1);
+                               } else {
+                                   sink.complete();
+                               }
+                           })
+                           .flatMap(x -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen)
+                                   .doOnSuccess(v -> sentCount.incrementAndGet()), 128)
+                           .then();
             }, clientCount)
             .then(Mono.delay(Duration.ofSeconds(2)))
             .block(Duration.ofSeconds(durationSeconds + 10));
@@ -396,14 +409,17 @@ class MqttServerStressTest {
 
         long startTime = System.currentTimeMillis();
 
-        createClient("stress-large")
-            .flatMap(conn -> Flux.range(0, messageCount)
-                .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_LEAST_ONCE, messageIdGen), 16)
-                .then()
-                .delayElement(Duration.ofSeconds(2))
-                .then(disconnect(conn))
-                .thenReturn(conn))
-            .block(TIMEOUT);
+        Connection conn = createClient("stress-large").block(TIMEOUT);
+
+        // 同步发送所有消息
+        Flux.range(0, messageCount)
+            .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_LEAST_ONCE, messageIdGen), 16)
+            .blockLast(TIMEOUT);
+
+        // 等待服务器处理
+        Mono.delay(Duration.ofSeconds(2)).block();
+
+        disconnect(conn).block(TIMEOUT);
 
         long elapsed = System.currentTimeMillis() - startTime;
         double dataMB = (messageCount * messageSize) / (1024.0 * 1024.0);
@@ -432,13 +448,13 @@ class MqttServerStressTest {
 
         Flux.range(0, iterations)
             .concatMap(i -> createClient("stress-rapid-" + i)
-                .flatMap(conn -> disconnect(conn).thenReturn(true))
-                .doOnSuccess(v -> successCount.incrementAndGet())
-                .onErrorResume(e -> {
-                    failCount.incrementAndGet();
-                    System.err.println("第 " + i + " 次迭代失败: " + e.getMessage());
-                    return Mono.just(false);
-                }))
+                    .flatMap(conn -> disconnect(conn).thenReturn(true))
+                    .doOnSuccess(v -> successCount.incrementAndGet())
+                    .onErrorResume(e -> {
+                        failCount.incrementAndGet();
+                        System.err.println("第 " + i + " 次迭代失败: " + e.getMessage());
+                        return Mono.just(false);
+                    }))
             .blockLast(Duration.ofSeconds(60));
 
         long elapsed = System.currentTimeMillis() - startTime;

@@ -73,30 +73,30 @@ public class ReactorMqttClient {
         CountDownLatch handlerReady = new CountDownLatch(1);
 
         this.connection = TcpClient.create()
-            .host(host)
-            .port(port)
-            .doOnConnected(conn -> {
-                conn.addHandlerLast("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
-                conn.addHandlerLast("mqtt-encoder", MqttEncoder.INSTANCE);
-            })
-            .handle((inbound, out) -> {
-                this.outbound = out;
+                                   .host(host)
+                                   .port(port)
+                                   .doOnConnected(conn -> {
+                                       conn.addHandlerLast("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
+                                       conn.addHandlerLast("mqtt-encoder", MqttEncoder.INSTANCE);
+                                   })
+                                   .handle((inbound, out) -> {
+                                       this.outbound = out;
 
-                // 订阅入站消息
-                inbound.receiveObject()
-                    .cast(MqttMessage.class)
-                    .subscribe(
-                        msg -> inboundSink.tryEmitNext(msg),
-                        err -> inboundSink.tryEmitError(err),
-                        () -> inboundSink.tryEmitComplete()
-                    );
+                                       // 订阅入站消息
+                                       inbound.receiveObject()
+                                              .cast(MqttMessage.class)
+                                              .subscribe(
+                                                      msg -> inboundSink.tryEmitNext(msg),
+                                                      err -> inboundSink.tryEmitError(err),
+                                                      () -> inboundSink.tryEmitComplete()
+                                              );
 
-                handlerReady.countDown();
+                                       handlerReady.countDown();
 
-                // 保持连接不关闭
-                return Mono.never();
-            })
-            .connectNow(timeout);
+                                       // 保持连接不关闭
+                                       return Mono.never();
+                                   })
+                                   .connectNow(timeout);
 
         // 等待 handler 准备就绪
         try {
@@ -110,20 +110,20 @@ public class ReactorMqttClient {
 
         // 发送 CONNECT 消息
         MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
-            .clientId(clientId)
-            .cleanSession(true)
-            .keepAlive(300)
-            .build();
+                                                               .clientId(clientId)
+                                                               .cleanSession(true)
+                                                               .keepAlive(300)
+                                                               .build();
 
         outbound.sendObject(Mono.just(connectMessage))
-            .then()
-            .block(timeout);
+                .then()
+                .block(timeout);
 
         // 等待 CONNACK
         MqttMessage connAck = inboundSink.asFlux()
-            .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
-            .next()
-            .block(timeout);
+                                         .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
+                                         .next()
+                                         .block(timeout);
 
         if (connAck == null) {
             throw new RuntimeException("未收到 CONNACK 响应");
@@ -167,23 +167,23 @@ public class ReactorMqttClient {
         ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
 
         MqttFixedHeader fixedHeader = new MqttFixedHeader(
-            MqttMessageType.PUBLISH,
-            false,
-            mqttQos,
-            retain,
-            0
+                MqttMessageType.PUBLISH,
+                false,
+                mqttQos,
+                retain,
+                0
         );
 
         MqttPublishVariableHeader variableHeader = new MqttPublishVariableHeader(
-            topic,
-            messageId
+                topic,
+                messageId
         );
 
         MqttPublishMessage publishMessage = new MqttPublishMessage(fixedHeader, variableHeader, payloadBuf);
 
         outbound.sendObject(Mono.just(publishMessage))
-            .then()
-            .block(timeout);
+                .then()
+                .block(timeout);
 
         // QoS1 等待 PUBACK，QoS2 等待完整的握手流程
         if (qos == 1) {
@@ -198,11 +198,11 @@ public class ReactorMqttClient {
      */
     private void waitForPubAck(int messageId, Duration timeout) {
         inboundSink.asFlux()
-            .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.PUBACK)
-            .cast(MqttPubAckMessage.class)
-            .filter(msg -> msg.variableHeader().messageId() == messageId)
-            .next()
-            .block(timeout);
+                   .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.PUBACK)
+                   .cast(MqttPubAckMessage.class)
+                   .filter(msg -> msg.variableHeader().messageId() == messageId)
+                   .next()
+                   .block(timeout);
     }
 
     /**
@@ -211,39 +211,39 @@ public class ReactorMqttClient {
     private void waitForQoS2Handshake(int messageId, Duration timeout) {
         // 等待 PUBREC
         inboundSink.asFlux()
-            .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.PUBREC)
-            .filter(msg -> {
-                MqttMessageIdVariableHeader header = (MqttMessageIdVariableHeader) msg.variableHeader();
-                return header.messageId() == messageId;
-            })
-            .next()
-            .block(timeout);
+                   .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.PUBREC)
+                   .filter(msg -> {
+                       MqttMessageIdVariableHeader header = (MqttMessageIdVariableHeader) msg.variableHeader();
+                       return header.messageId() == messageId;
+                   })
+                   .next()
+                   .block(timeout);
 
         // 发送 PUBREL
         MqttFixedHeader pubRelHeader = new MqttFixedHeader(
-            MqttMessageType.PUBREL,
-            false,
-            MqttQoS.AT_LEAST_ONCE,
-            false,
-            0
+                MqttMessageType.PUBREL,
+                false,
+                MqttQoS.AT_LEAST_ONCE,
+                false,
+                0
         );
         MqttPubReplyMessageVariableHeader pubRelVariableHeader =
-            new MqttPubReplyMessageVariableHeader(messageId, (byte) 0, MqttProperties.NO_PROPERTIES);
+                new MqttPubReplyMessageVariableHeader(messageId, (byte) 0, MqttProperties.NO_PROPERTIES);
         MqttMessage pubRelMessage = new MqttMessage(pubRelHeader, pubRelVariableHeader);
 
         outbound.sendObject(Mono.just(pubRelMessage))
-            .then()
-            .block(timeout);
+                .then()
+                .block(timeout);
 
         // 等待 PUBCOMP
         inboundSink.asFlux()
-            .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.PUBCOMP)
-            .filter(msg -> {
-                MqttMessageIdVariableHeader header = (MqttMessageIdVariableHeader) msg.variableHeader();
-                return header.messageId() == messageId;
-            })
-            .next()
-            .block(timeout);
+                   .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.PUBCOMP)
+                   .filter(msg -> {
+                       MqttMessageIdVariableHeader header = (MqttMessageIdVariableHeader) msg.variableHeader();
+                       return header.messageId() == messageId;
+                   })
+                   .next()
+                   .block(timeout);
     }
 
     /**
@@ -253,18 +253,18 @@ public class ReactorMqttClient {
         if (connection != null && !connection.isDisposed()) {
             // 发送 DISCONNECT 消息
             MqttFixedHeader fixedHeader = new MqttFixedHeader(
-                MqttMessageType.DISCONNECT,
-                false,
-                MqttQoS.AT_MOST_ONCE,
-                false,
-                0
+                    MqttMessageType.DISCONNECT,
+                    false,
+                    MqttQoS.AT_MOST_ONCE,
+                    false,
+                    0
             );
             MqttMessage disconnectMessage = new MqttMessage(fixedHeader);
 
             try {
                 outbound.sendObject(Mono.just(disconnectMessage))
-                    .then()
-                    .block(Duration.ofSeconds(1));
+                        .then()
+                        .block(Duration.ofSeconds(1));
             } catch (Exception ignored) {
                 // 忽略断开连接时的异常
             }

@@ -69,35 +69,35 @@ class MqttAutoAckTest {
         CountDownLatch latch = new CountDownLatch(1);
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection
-                // 默认 autoAck = true
-                .listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        receivedPayload.set(message.getPayload().toString(StandardCharsets.UTF_8));
-                        latch.countDown();
-                        // 不调用 acknowledge()，依赖自动应答
-                        return Mono.empty();
-                    }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection
+                                   // 默认 autoAck = true
+                                   .listener(new MqttMessageListener() {
+                                       @Override
+                                       public Mono<Void> onPublish(MqttPublishing message) {
+                                           receivedPayload.set(message.getPayload().toString(StandardCharsets.UTF_8));
+                                           latch.countDown();
+                                           // 不调用 acknowledge()，依赖自动应答
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection connection) {
-                        return Mono.empty();
-                    }
-                }).accept())
-            .bindNow();
+                                       @Override
+                                       public Mono<Void> onDisconnect(MqttConnection connection) {
+                                           return Mono.empty();
+                                       }
+                                   }).accept())
+                           .bindNow();
 
         ReactorMqttClient client = createClient("auto-ack-client");
 
@@ -119,34 +119,34 @@ class MqttAutoAckTest {
         CountDownLatch latch = new CountDownLatch(3);
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection
-                .autoAck(true)  // 显式设置自动应答
-                .listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        messageCount.incrementAndGet();
-                        latch.countDown();
-                        return Mono.empty();
-                    }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection
+                                   .autoAck(true)  // 显式设置自动应答
+                                   .listener(new MqttMessageListener() {
+                                       @Override
+                                       public Mono<Void> onPublish(MqttPublishing message) {
+                                           messageCount.incrementAndGet();
+                                           latch.countDown();
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection connection) {
-                        return Mono.empty();
-                    }
-                }).accept())
-            .bindNow();
+                                       @Override
+                                       public Mono<Void> onDisconnect(MqttConnection connection) {
+                                           return Mono.empty();
+                                       }
+                                   }).accept())
+                           .bindNow();
 
         ReactorMqttClient client = createClient("auto-ack-explicit-client");
 
@@ -171,36 +171,36 @@ class MqttAutoAckTest {
         CountDownLatch latch = new CountDownLatch(1);
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection
-                .autoAck(false)  // 手动应答模式
-                .listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        receivedPayload.set(message.getPayload().toString(StandardCharsets.UTF_8));
-                        latch.countDown();
-                        // 手动应答：模拟处理后再确认
-                        return Mono.delay(java.time.Duration.ofMillis(100))
-                                   .then(message.acknowledge());
-                    }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection
+                                   .autoAck(false)  // 手动应答模式
+                                   .listener(new MqttMessageListener() {
+                                       @Override
+                                       public Mono<Void> onPublish(MqttPublishing message) {
+                                           receivedPayload.set(message.getPayload().toString(StandardCharsets.UTF_8));
+                                           latch.countDown();
+                                           // 手动应答：模拟处理后再确认
+                                           return Mono.delay(java.time.Duration.ofMillis(100))
+                                                      .then(message.acknowledge());
+                                       }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection connection) {
-                        return Mono.empty();
-                    }
-                }).accept())
-            .bindNow();
+                                       @Override
+                                       public Mono<Void> onDisconnect(MqttConnection connection) {
+                                           return Mono.empty();
+                                       }
+                                   }).accept())
+                           .bindNow();
 
         ReactorMqttClient client = createClient("manual-ack-client");
 
@@ -223,36 +223,36 @@ class MqttAutoAckTest {
         CountDownLatch latch = new CountDownLatch(1);
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection
-                .autoAck(false)
-                .listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        receivedPayload.set(message.getPayload().toString(StandardCharsets.UTF_8));
-                        qosLevel.set(message.getQosLevel());
-                        latch.countDown();
-                        // 手动应答 QoS2
-                        return message.acknowledge();
-                    }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection
+                                   .autoAck(false)
+                                   .listener(new MqttMessageListener() {
+                                       @Override
+                                       public Mono<Void> onPublish(MqttPublishing message) {
+                                           receivedPayload.set(message.getPayload().toString(StandardCharsets.UTF_8));
+                                           qosLevel.set(message.getQosLevel());
+                                           latch.countDown();
+                                           // 手动应答 QoS2
+                                           return message.acknowledge();
+                                       }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection connection) {
-                        return Mono.empty();
-                    }
-                }).accept())
-            .bindNow();
+                                       @Override
+                                       public Mono<Void> onDisconnect(MqttConnection connection) {
+                                           return Mono.empty();
+                                       }
+                                   }).accept())
+                           .bindNow();
 
         ReactorMqttClient client = createClient("manual-ack-qos2-client");
 
@@ -275,35 +275,35 @@ class MqttAutoAckTest {
         CountDownLatch latch = new CountDownLatch(2);
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection
-                .autoAck(false)  // 即使设置手动应答，QoS0 也不需要
-                .listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        messageCount.incrementAndGet();
-                        latch.countDown();
-                        // QoS0 不需要调用 acknowledge()
-                        return Mono.empty();
-                    }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection
+                                   .autoAck(false)  // 即使设置手动应答，QoS0 也不需要
+                                   .listener(new MqttMessageListener() {
+                                       @Override
+                                       public Mono<Void> onPublish(MqttPublishing message) {
+                                           messageCount.incrementAndGet();
+                                           latch.countDown();
+                                           // QoS0 不需要调用 acknowledge()
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection connection) {
-                        return Mono.empty();
-                    }
-                }).accept())
-            .bindNow();
+                                       @Override
+                                       public Mono<Void> onDisconnect(MqttConnection connection) {
+                                           return Mono.empty();
+                                       }
+                                   }).accept())
+                           .bindNow();
 
         ReactorMqttClient client = createClient("qos0-client");
 
@@ -327,35 +327,35 @@ class MqttAutoAckTest {
         CountDownLatch latch = new CountDownLatch(expectedCount);
 
         server = MqttServer.create()
-            .host(HOST)
-            .port(PORT)
-            .handle(connection -> connection
-                .autoAck(false)
-                .listener(new MqttMessageListener() {
-                    @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
-                        messageCount.incrementAndGet();
-                        latch.countDown();
-                        // 每条消息都手动应答
-                        return message.acknowledge();
-                    }
+                           .host(HOST)
+                           .port(PORT)
+                           .handle(connection -> connection
+                                   .autoAck(false)
+                                   .listener(new MqttMessageListener() {
+                                       @Override
+                                       public Mono<Void> onPublish(MqttPublishing message) {
+                                           messageCount.incrementAndGet();
+                                           latch.countDown();
+                                           // 每条消息都手动应答
+                                           return message.acknowledge();
+                                       }
 
-                    @Override
-                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
-                        return Mono.empty();
-                    }
+                                       @Override
+                                       public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                           return Mono.empty();
+                                       }
 
-                    @Override
-                    public Mono<Void> onDisconnect(MqttConnection connection) {
-                        return Mono.empty();
-                    }
-                }).accept())
-            .bindNow();
+                                       @Override
+                                       public Mono<Void> onDisconnect(MqttConnection connection) {
+                                           return Mono.empty();
+                                       }
+                                   }).accept())
+                           .bindNow();
 
         ReactorMqttClient client = createClient("multi-msg-client");
 

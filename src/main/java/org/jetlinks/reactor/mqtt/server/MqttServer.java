@@ -131,21 +131,33 @@ public class MqttServer {
     }
 
     public MqttServer host(String host) {
+        if (host == null || host.isBlank()) {
+            throw new IllegalArgumentException("host must not be null or blank");
+        }
         this.host = host;
         return this;
     }
 
     public MqttServer port(int port) {
+        if (port < 0 || port > 65535) {
+            throw new IllegalArgumentException("Port must be between 0 and 65535, got: " + port);
+        }
         this.port = port;
         return this;
     }
 
     public MqttServer maxMessageSize(int maxMessageSize) {
+        if (maxMessageSize <= 0) {
+            throw new IllegalArgumentException("maxMessageSize must be positive, got: " + maxMessageSize);
+        }
         this.maxMessageSize = maxMessageSize;
         return this;
     }
 
     public MqttServer idleTimeout(Duration idleTimeout) {
+        if (idleTimeout != null && idleTimeout.isNegative()) {
+            throw new IllegalArgumentException("idleTimeout must not be negative, got: " + idleTimeout);
+        }
         this.idleTimeout = idleTimeout;
         return this;
     }
@@ -168,6 +180,9 @@ public class MqttServer {
      * 设置工作线程数（默认为 CPU 核心数）
      */
     public MqttServer workerCount(int workerCount) {
+        if (workerCount <= 0) {
+            throw new IllegalArgumentException("workerCount must be positive, got: " + workerCount);
+        }
         this.workerCount = workerCount;
         return this;
     }
@@ -192,6 +207,9 @@ public class MqttServer {
      * 设置 SO_BACKLOG（连接队列大小）
      */
     public MqttServer soBacklog(int soBacklog) {
+        if (soBacklog <= 0) {
+            throw new IllegalArgumentException("soBacklog must be positive, got: " + soBacklog);
+        }
         this.soBacklog = soBacklog;
         return this;
     }
@@ -200,6 +218,15 @@ public class MqttServer {
      * 设置写缓冲区水位线
      */
     public MqttServer writeBufferWaterMark(int low, int high) {
+        if (low <= 0) {
+            throw new IllegalArgumentException("writeBufferLow must be positive, got: " + low);
+        }
+        if (high <= 0) {
+            throw new IllegalArgumentException("writeBufferHigh must be positive, got: " + high);
+        }
+        if (low > high) {
+            throw new IllegalArgumentException("writeBufferLow must be <= writeBufferHigh, got low: " + low + ", high: " + high);
+        }
         this.writeBufferLow = low;
         this.writeBufferHigh = high;
         return this;

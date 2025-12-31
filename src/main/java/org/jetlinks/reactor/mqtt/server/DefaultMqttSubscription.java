@@ -21,6 +21,8 @@ import io.netty.handler.codec.mqtt.MqttSubAckMessage;
 import io.netty.handler.codec.mqtt.MqttSubscribeMessage;
 import io.netty.handler.codec.mqtt.MqttMessageBuilders;
 import io.netty.handler.codec.mqtt.MqttTopicSubscription;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -55,12 +57,12 @@ public class DefaultMqttSubscription implements MqttSubscription {
             }
 
             MqttSubAckMessage subAck = MqttMessageBuilders.subAck()
-                .packetId(message.variableHeader().messageId())
-                .addGrantedQoses(message.payload().topicSubscriptions()
-                    .stream()
-                    .map(MqttTopicSubscription::qualityOfService)
-                    .toArray(MqttQoS[]::new))
-                .build();
+                                                          .packetId(message.variableHeader().messageId())
+                                                          .addGrantedQoses(message.payload().topicSubscriptions()
+                                                                                  .stream()
+                                                                                  .map(MqttTopicSubscription::qualityOfService)
+                                                                                  .toArray(MqttQoS[]::new))
+                                                          .build();
             return sender.apply(subAck);
         });
     }

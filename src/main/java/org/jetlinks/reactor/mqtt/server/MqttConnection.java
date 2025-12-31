@@ -21,7 +21,6 @@ import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.function.Consumer;
 
 /**
  * MQTT 连接接口 - 纯响应式 API
@@ -29,12 +28,21 @@ import java.util.function.Consumer;
  * <pre>{@code
  * MqttServer.create()
  *     .handle(connection -> {
- *         connection
- *             .handlePublishing(message -> ...)
- *             .handleSubscribe(subscription -> ...)
- *             .handleUnsubscribe(topic -> ...);
+ *         connection.listener(new MqttMessageListener() {
+ *             @Override
+ *             public Mono<Void> onPublish(MqttPublishing message) {
+ *                 System.out.println("Received: " + message.getTopic());
+ *                 return Mono.empty();
+ *             }
  *
- *         return validate(connection).then(connection.accept());
+ *             @Override
+ *             public Mono<Void> onSubscribe(MqttSubscription subscription) {
+ *                 System.out.println("Subscribe: " + subscription.getMessage());
+ *                 return Mono.empty();
+ *             }
+ *         });
+ *
+ *         return connection.accept();
  *     })
  *     .bindNow();
  * }</pre>
@@ -69,37 +77,27 @@ public interface MqttConnection {
     MqttWill getWill();
 
     /**
-     * 处理客户端发布的消息
+     * 设置响应式消息监听器
      * <p>
-     * 自动 ACK（QoS 1/2）、自动释放资源
+     * 使用统一的监听器接口处理所有 MQTT 消息事件。
+     * 这是推荐的消息处理方式，所有回调都返回 {@link Mono}。
      * </p>
      *
-     * @param handler 消息处理 Consumer
-     * @return 当前连接实例（支持链式调用）
-     */
-    MqttConnection handlePublishing(Consumer<MqttPublishing> handler);
-
-    /**
-     * 处理订阅请求
-     * <p>
-     * 自动发送 SUBACK
-     * </p>
+     * <pre>{@code
+     * connection.listener(new MqttMessageListener() {
+     *     @Override
+     *     public Mono<Void> onPublish(MqttPublishing message) {
+     *         return processMessage(message)
+     *             .then(message.acknowledge());
+     *     }
+     * });
+     * }</pre>
      *
-     * @param handler 订阅处理 Consumer
+     * @param listener 消息监听器
      * @return 当前连接实例（支持链式调用）
+     * @see MqttMessageListener
      */
-    MqttConnection handleSubscribe(Consumer<MqttSubscription> handler);
-
-    /**
-     * 处理取消订阅请求
-     * <p>
-     * 自动发送 UNSUBACK
-     * </p>
-     *
-     * @param handler 取消订阅处理 Consumer
-     * @return 当前连接实例（支持链式调用）
-     */
-    MqttConnection handleUnsubscribe(Consumer<MqttUnSubscription> handler);
+    MqttConnection listener(MqttMessageListener listener);
 
     /**
      * 发布消息到客户端

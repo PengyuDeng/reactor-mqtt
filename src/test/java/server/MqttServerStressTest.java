@@ -20,8 +20,9 @@ import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
-import org.jetlinks.reactor.mqtt.server.MqttServer;
+import org.jetlinks.reactor.mqtt.server.*;
 import org.junit.jupiter.api.*;
+import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 
 import java.time.Duration;
@@ -65,12 +66,28 @@ class MqttServerStressTest {
                     .doOnSuccess(v -> connectedClients.decrementAndGet())
                     .subscribe();
 
-                connection
-                    .handlePublishing(msg -> receivedMessages.incrementAndGet())
-                    .handleSubscribe(sub -> {})
-                    .handleUnsubscribe(unsub -> {});
+                return connection.listener(new MqttMessageListener() {
+                    @Override
+                    public Mono<Void> onPublish(MqttPublishing message) {
+                        receivedMessages.incrementAndGet();
+                        return Mono.empty();
+                    }
 
-                return connection.accept();
+                    @Override
+                    public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                        return Mono.empty();
+                    }
+
+                    @Override
+                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                        return Mono.empty();
+                    }
+
+                    @Override
+                    public Mono<Void> onDisconnect(MqttConnection conn) {
+                        return Mono.empty();
+                    }
+                }).accept();
             })
             .bindNow();
 

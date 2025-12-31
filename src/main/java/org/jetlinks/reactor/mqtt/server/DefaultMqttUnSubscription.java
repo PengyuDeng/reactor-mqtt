@@ -19,6 +19,8 @@ import io.netty.handler.codec.mqtt.MqttMessage;
 import io.netty.handler.codec.mqtt.MqttMessageBuilders;
 import io.netty.handler.codec.mqtt.MqttUnsubAckMessage;
 import io.netty.handler.codec.mqtt.MqttUnsubscribeMessage;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -53,8 +55,8 @@ public class DefaultMqttUnSubscription implements MqttUnSubscription {
             }
 
             MqttUnsubAckMessage unsubAck = MqttMessageBuilders.unsubAck()
-                .packetId(message.variableHeader().messageId())
-                .build();
+                                                              .packetId(message.variableHeader().messageId())
+                                                              .build();
             return sender.apply(unsubAck);
         });
     }

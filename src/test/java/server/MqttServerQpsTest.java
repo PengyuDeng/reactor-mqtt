@@ -20,7 +20,7 @@ import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.mqtt.MqttClient;
 import io.vertx.mqtt.MqttClientOptions;
-import org.jetlinks.reactor.mqtt.server.MqttServer;
+import org.jetlinks.reactor.mqtt.server.*;
 import org.junit.jupiter.api.*;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
@@ -62,13 +62,28 @@ class MqttServerQpsTest {
             .port(PORT)
             .maxMessageSize(65536)
             .idleTimeout(Duration.ofSeconds(300))
-            .handle(connection -> {
-                connection
-                    .handlePublishing(msg -> receivedMessages.increment())
-                    .handleSubscribe(sub -> {})
-                    .handleUnsubscribe(unsub -> {});
-                return connection.accept();
-            })
+            .handle(connection -> connection.listener(new MqttMessageListener() {
+                @Override
+                public Mono<Void> onPublish(MqttPublishing message) {
+                    receivedMessages.increment();
+                    return Mono.empty();
+                }
+
+                @Override
+                public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                    return Mono.empty();
+                }
+
+                @Override
+                public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                    return Mono.empty();
+                }
+
+                @Override
+                public Mono<Void> onDisconnect(MqttConnection conn) {
+                    return Mono.empty();
+                }
+            }).accept())
             .bindNow();
 
         System.out.println("MQTT 服务器已启动: tcp://" + HOST + ":" + PORT);

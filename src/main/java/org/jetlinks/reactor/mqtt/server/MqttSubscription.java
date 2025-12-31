@@ -16,6 +16,7 @@
 package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.codec.mqtt.MqttSubscribeMessage;
+import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 
 /**
@@ -33,5 +34,5 @@ public interface MqttSubscription {
     /**
      * 确认订阅（发送 SUBACK）
      */
-    Mono<Void> acknowledge();
+    Publisher<Void> acknowledge();
 }

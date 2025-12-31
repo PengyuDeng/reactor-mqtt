@@ -19,18 +19,20 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
+import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
 import reactor.netty.NettyOutbound;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+
+import static org.jetlinks.reactor.mqtt.server.MqttConnectionState.*;
 
 /**
  * 基于 Reactor Netty 的 MQTT 连接实现 - 纯响应式
@@ -41,108 +43,183 @@ public class DefaultMqttConnection implements MqttConnection {
 
     private static final Logger log = Logger.getLogger(DefaultMqttConnection.class.getName());
 
+    private static final VarHandle STATE;
+    private static final VarHandle LAST_PING_TIME;
+    private static final VarHandle KEEP_ALIVE_TIMEOUT_MS;
+
+    static {
+        try {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            STATE = lookup.findVarHandle(DefaultMqttConnection.class, "state", byte.class);
+            LAST_PING_TIME = lookup.findVarHandle(DefaultMqttConnection.class, "lastPingTime", long.class);
+            KEEP_ALIVE_TIMEOUT_MS = lookup.findVarHandle(DefaultMqttConnection.class, "keepAliveTimeoutMs", long.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private final Connection connection;
     private final NettyOutbound outbound;
 
     private volatile String clientId = "unknown";
     private volatile MqttConnectMessage connectMessage;
 
-    private final AtomicBoolean closed = new AtomicBoolean(false);
-    private final AtomicBoolean accepted = new AtomicBoolean(false);
-    private final AtomicLong lastPingTime = new AtomicLong();
-    private final AtomicLong keepAliveTimeoutMs = new AtomicLong(120_000L);
+    @SuppressWarnings("unused") // accessed via VarHandle
+    private final byte state = STATE_INIT;
+    @SuppressWarnings("unused") // accessed via VarHandle
+    private volatile long lastPingTime;
+    @SuppressWarnings("unused") // accessed via VarHandle
+    private final long keepAliveTimeoutMs = 120_000L;
 
     private final Sinks.One<MqttConnectMessage> connectSink = Sinks.one();
     private final Sinks.Empty<Void> disposeSink = Sinks.empty();
 
-    private volatile Consumer<MqttPublishing> publishingHandler;
-    private volatile Consumer<MqttSubscription> subscribeHandler;
-    private volatile Consumer<MqttUnSubscription> unsubscribeHandler;
+    private volatile MqttMessageListener messageListener;
+
+    private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
     public DefaultMqttConnection(Connection connection) {
         this.connection = connection;
         this.outbound = connection.outbound();
-        this.lastPingTime.set(System.currentTimeMillis());
+        LAST_PING_TIME.set(this, System.currentTimeMillis());
 
         connection.onDispose(() -> {
-            if (closed.compareAndSet(false, true)) {
-                disposeSink.tryEmitEmpty();
+            if (casSetClosed()) {
+                // 触发响应式 listener 的 onDisconnect
+                if (messageListener != null) {
+                    messageListener.onDisconnect(this).subscribe();
+                }
+                emitEmpty(disposeSink);
             }
         });
 
         startInboundHandling();
     }
 
+    /**
+     * CAS 设置关闭状态
+     * @return true 如果状态变更成功（之前未关闭）
+     */
+    private boolean casSetClosed() {
+        byte current;
+        byte next;
+        do {
+            current = (byte) STATE.get(this);
+            if (isClosed(current)) {
+                return false;
+            }
+            next = setClosed(current);
+        } while (!STATE.compareAndSet(this, current, next));
+        return true;
+    }
+
+    /**
+     * CAS 设置接受状态
+     * @return true 如果状态变更成功（之前未接受）
+     */
+    private boolean casSetAccepted() {
+        byte current;
+        byte next;
+        do {
+            current = (byte) STATE.get(this);
+            if (isAccepted(current)) {
+                return false;
+            }
+            next = setAccepted(current);
+        } while (!STATE.compareAndSet(this, current, next));
+        return true;
+    }
+
+    private void emitEmpty(Sinks.Empty<Void> sink) {
+        Sinks.EmitResult result = sink.tryEmitEmpty();
+        if (result.isFailure() && log.isLoggable(Level.FINE)) {
+            log.fine("Emit empty failed: " + result);
+        }
+    }
+
+    private <T> void emitValue(Sinks.One<T> sink, T value) {
+        Sinks.EmitResult result = sink.tryEmitValue(value);
+        if (result.isFailure() && log.isLoggable(Level.FINE)) {
+            log.fine("Emit value failed: " + result);
+        }
+    }
+
     private void startInboundHandling() {
         connection.inbound()
                   .receiveObject()
                   .cast(MqttMessage.class)
-                  .subscribe(
-                      this::handleMqttMessageSync,
-                      err -> log.log(Level.WARNING, "Inbound error", err),
-                      () -> {},
-                      subscription -> subscription.request(Long.MAX_VALUE)
-                  );
+                  .flatMap(this::handleMqttMessageSync)
+                  .subscribe();
     }
 
-    private void handleMqttMessageSync(MqttMessage msg) {
-        lastPingTime.set(System.currentTimeMillis());
-        MqttMessageType type = msg.fixedHeader().messageType();
+    private Mono<Void> handleMqttMessageSync(MqttMessage msg) {
+        return Mono.defer(() -> {
+            LAST_PING_TIME.set(this, System.currentTimeMillis());
+            MqttMessageType type = msg.fixedHeader().messageType();
 
-        if (type == MqttMessageType.CONNECT) {
-            MqttConnectMessage connectMsg = (MqttConnectMessage) msg;
-            this.connectMessage = connectMsg;
-            this.clientId = connectMsg.payload().clientIdentifier();
-            int keepAliveSeconds = connectMsg.variableHeader().keepAliveTimeSeconds();
-            this.keepAliveTimeoutMs.set((keepAliveSeconds + 10) * 1000L);
-            connectSink.tryEmitValue(connectMsg);
-            return;
-        }
-
-        if (!accepted.get()) {
-            return;
-        }
-
-        switch (type) {
-            case PUBLISH -> handlePublishSync((MqttPublishMessage) msg);
-            case PUBREC -> handlePubRec((MqttMessageIdVariableHeader) msg.variableHeader()).subscribe();
-            case PUBREL -> handlePubRel((MqttMessageIdVariableHeader) msg.variableHeader()).subscribe();
-            case SUBSCRIBE -> handleSubscribeMsg((MqttSubscribeMessage) msg).subscribe();
-            case UNSUBSCRIBE -> handleUnsubscribeMsg((MqttUnsubscribeMessage) msg).subscribe();
-            case PINGREQ -> handlePingReq().subscribe();
-            case DISCONNECT -> close().subscribe();
-            default -> {}
-        }
-    }
-
-    private void handlePublishSync(MqttPublishMessage msg) {
-        if (publishingHandler != null) {
-            DefaultMqttPublishing publishing = new DefaultMqttPublishing(msg, clientId, this::send);
-            publishingHandler.accept(publishing);
-
-            if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
-                ReferenceCountUtil.retain(msg);
-                publishing.acknowledge()
-                         .doFinally(signal -> publishing.release())
-                         .subscribe();
+            if (type == MqttMessageType.CONNECT) {
+                MqttConnectMessage connectMsg = (MqttConnectMessage) msg;
+                this.connectMessage = connectMsg;
+                this.clientId = connectMsg.payload().clientIdentifier();
+                int keepAliveSeconds = connectMsg.variableHeader().keepAliveTimeSeconds();
+                KEEP_ALIVE_TIMEOUT_MS.set(this, (keepAliveSeconds + 10) * 1000L);
+                emitValue(connectSink, connectMsg);
+                return Mono.empty();
             }
+
+            if (!isAccepted((byte) STATE.get(this))) {
+                return Mono.empty();
+            }
+
+            return switch (type) {
+                case PUBLISH -> handlePublishSync((MqttPublishMessage) msg);
+                case PUBREC -> handlePubRec((MqttMessageIdVariableHeader) msg.variableHeader());
+                case PUBREL -> handlePubRel((MqttMessageIdVariableHeader) msg.variableHeader());
+                case SUBSCRIBE -> handleSubscribeMsg((MqttSubscribeMessage) msg);
+                case UNSUBSCRIBE -> handleUnsubscribeMsg((MqttUnsubscribeMessage) msg);
+                case PINGREQ -> handlePingReq();
+                case DISCONNECT -> close();
+                default -> Mono.empty();
+            };
+        });
+    }
+
+    private Mono<Void> handlePublishSync(MqttPublishMessage msg) {
+        if (messageListener == null) {
+            return Mono.empty();
         }
+
+        DefaultMqttPublishing publishing = new DefaultMqttPublishing(msg, clientId, this::send);
+
+        if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
+            ReferenceCountUtil.retain(msg);
+            return messageListener.onPublish(publishing)
+                                  .then(publishing.acknowledge())
+                                  .doFinally(signal -> publishing.release());
+        }
+        return messageListener.onPublish(publishing);
     }
 
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {
         DefaultMqttSubscription sub = new DefaultMqttSubscription(msg, this::send);
-        if (subscribeHandler != null) {
-            subscribeHandler.accept(sub);
+
+        if (messageListener != null) {
+            return messageListener.onSubscribe(sub)
+                                  .then(Mono.defer(() -> Mono.from(sub.acknowledge())));
         }
-        return sub.acknowledge();
+
+        return Mono.from(sub.acknowledge());
     }
 
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
         DefaultMqttUnSubscription unsub = new DefaultMqttUnSubscription(msg, this::send);
-        if (unsubscribeHandler != null) {
-            unsubscribeHandler.accept(unsub);
+
+        if (messageListener != null) {
+            return messageListener.onUnsubscribe(unsub)
+                                  .then(Mono.defer(() -> Mono.from(unsub.acknowledge())));
         }
-        return unsub.acknowledge();
+
+        return Mono.from(unsub.acknowledge());
     }
 
     private Mono<Void> handlePubRec(MqttMessageIdVariableHeader header) {
@@ -172,8 +249,12 @@ public class DefaultMqttConnection implements MqttConnection {
         return outbound.sendObject(Mono.just(msg)).then();
     }
 
+    private Mono<Void> send(Publisher<Object> msg) {
+        return outbound.sendObject(msg).then();
+    }
+
     public Mono<MqttConnectMessage> awaitConnect() {
-        return connectSink.asMono().timeout(Duration.ofSeconds(10));
+        return connectSink.asMono().timeout(CONNECTION_TIMEOUT);
     }
 
     @Override
@@ -195,7 +276,7 @@ public class DefaultMqttConnection implements MqttConnection {
     @Override
     public Mono<Void> reject(MqttConnectReturnCode code) {
         return Mono.defer(() -> {
-            if (closed.get()) {
+            if (isClosed((byte) STATE.get(this))) {
                 return Mono.empty();
             }
             MqttConnAckMessage connAck = MqttMessageBuilders.connAck()
@@ -209,7 +290,7 @@ public class DefaultMqttConnection implements MqttConnection {
     @Override
     public Mono<Void> accept() {
         return Mono.defer(() -> {
-            if (!accepted.compareAndSet(false, true)) {
+            if (!casSetAccepted()) {
                 return Mono.empty();
             }
             MqttConnAckMessage connAck = MqttMessageBuilders.connAck()
@@ -239,20 +320,8 @@ public class DefaultMqttConnection implements MqttConnection {
     }
 
     @Override
-    public MqttConnection handlePublishing(Consumer<MqttPublishing> handler) {
-        this.publishingHandler = handler;
-        return this;
-    }
-
-    @Override
-    public MqttConnection handleSubscribe(Consumer<MqttSubscription> handler) {
-        this.subscribeHandler = handler;
-        return this;
-    }
-
-    @Override
-    public MqttConnection handleUnsubscribe(Consumer<MqttUnSubscription> handler) {
-        this.unsubscribeHandler = handler;
+    public MqttConnection listener(MqttMessageListener listener) {
+        this.messageListener = listener;
         return this;
     }
 
@@ -268,17 +337,17 @@ public class DefaultMqttConnection implements MqttConnection {
 
     @Override
     public boolean isAlive() {
-        return !closed.get() && connection.channel().isActive();
+        return !isClosed((byte) STATE.get(this)) && connection.channel().isActive();
     }
 
     @Override
     public Mono<Void> close() {
         return Mono.defer(() -> {
-            if (!closed.compareAndSet(false, true)) {
+            if (!casSetClosed()) {
                 return Mono.empty();
             }
             return Mono.fromRunnable(() -> {
-                disposeSink.tryEmitEmpty();
+                emitEmpty(disposeSink);
                 connection.dispose();
             });
         });
@@ -286,17 +355,17 @@ public class DefaultMqttConnection implements MqttConnection {
 
     @Override
     public long getLastPingTime() {
-        return lastPingTime.get();
+        return (long) LAST_PING_TIME.get(this);
     }
 
     @Override
     public Duration getKeepAliveTimeout() {
-        return Duration.ofMillis(keepAliveTimeoutMs.get());
+        return Duration.ofMillis((long) KEEP_ALIVE_TIMEOUT_MS.get(this));
     }
 
     @Override
     public Mono<Void> setKeepAliveTimeout(Duration duration) {
-        return Mono.fromRunnable(() -> keepAliveTimeoutMs.set(duration.toMillis()));
+        return Mono.fromRunnable(() -> KEEP_ALIVE_TIMEOUT_MS.set(this, duration.toMillis()));
     }
 
     @Override

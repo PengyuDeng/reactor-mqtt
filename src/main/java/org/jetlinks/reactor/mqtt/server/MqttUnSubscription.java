@@ -16,6 +16,7 @@
 package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.codec.mqtt.MqttUnsubscribeMessage;
+import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 
 /**
@@ -33,5 +34,5 @@ public interface MqttUnSubscription {
     /**
      * 确认取消订阅（发送 UNSUBACK）
      */
-    Mono<Void> acknowledge();
+    Publisher<Void> acknowledge();
 }

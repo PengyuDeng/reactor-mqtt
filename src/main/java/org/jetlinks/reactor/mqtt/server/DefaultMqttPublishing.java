@@ -18,6 +18,8 @@ package org.jetlinks.reactor.mqtt.server;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -99,14 +101,13 @@ public class DefaultMqttPublishing implements MqttPublishing {
 
             if (qos == MqttQoS.AT_LEAST_ONCE) {
                 MqttMessage pubAck = MqttMessageBuilders.pubAck()
-                    .packetId(message.variableHeader().packetId())
-                    .build();
+                                                        .packetId(message.variableHeader().packetId())
+                                                        .build();
                 ackMono = sender.apply(pubAck);
             } else if (qos == MqttQoS.EXACTLY_ONCE) {
                 MqttMessage pubRec = new MqttMessage(
-                    new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0),
-                    MqttMessageIdVariableHeader.from(message.variableHeader().packetId())
-                );
+                        new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0),
+                        MqttMessageIdVariableHeader.from(message.variableHeader().packetId()));
                 ackMono = sender.apply(pubRec);
             } else {
                 ackMono = Mono.empty();

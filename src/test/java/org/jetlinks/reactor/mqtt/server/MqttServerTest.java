@@ -374,7 +374,7 @@ class MqttServerTest {
                                }
 
                                @Override
-                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                               public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                    return Mono.empty();
                                }
 
@@ -422,7 +422,7 @@ class MqttServerTest {
                                }
 
                                @Override
-                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                               public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                    return Mono.empty();
                                }
 
@@ -467,7 +467,7 @@ class MqttServerTest {
                                }
 
                                @Override
-                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                               public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                    return Mono.empty();
                                }
 
@@ -515,7 +515,7 @@ class MqttServerTest {
                                }
 
                                @Override
-                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                               public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                    return Mono.empty();
                                }
 
@@ -562,7 +562,7 @@ class MqttServerTest {
                                }
 
                                @Override
-                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                               public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                    unsubscribedSink.tryEmitValue(true);
                                    return Mono.empty();
                                }
@@ -615,7 +615,7 @@ class MqttServerTest {
                                    }
 
                                    @Override
-                                   public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                   public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                        return Mono.empty();
                                    }
 
@@ -667,7 +667,7 @@ class MqttServerTest {
                                }
 
                                @Override
-                               public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                               public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                    return Mono.empty();
                                }
 
@@ -712,7 +712,7 @@ class MqttServerTest {
         }
 
         @Override
-        public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+        public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
             return Mono.empty();
         }
 

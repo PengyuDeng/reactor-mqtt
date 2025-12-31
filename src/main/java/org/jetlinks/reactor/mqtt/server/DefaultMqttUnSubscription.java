@@ -31,13 +31,13 @@ import java.util.function.Function;
  *
  * @author PengyuDeng
  */
-public class DefaultMqttUnSubscription implements MqttUnSubscription {
+public class DefaultMqttUnsubscription implements MqttUnsubscription {
 
     private final MqttUnsubscribeMessage message;
     private final Function<MqttMessage, Mono<Void>> sender;
     private final AtomicBoolean acknowledged = new AtomicBoolean(false);
 
-    public DefaultMqttUnSubscription(MqttUnsubscribeMessage message, Function<MqttMessage, Mono<Void>> sender) {
+    public DefaultMqttUnsubscription(MqttUnsubscribeMessage message, Function<MqttMessage, Mono<Void>> sender) {
         this.message = message;
         this.sender = sender;
     }

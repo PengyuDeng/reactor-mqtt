@@ -41,7 +41,7 @@ import reactor.core.publisher.Mono;
  *             }
  *
  *             @Override
- *             public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+ *             public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
  *                 System.out.println("Unsubscribe: " + unsubscription.getMessage());
  *                 return Mono.empty();
  *             }
@@ -94,7 +94,7 @@ public interface MqttMessageListener {
      * @param unsubscription 取消订阅请求
      * @return 处理完成的 Mono
      */
-    Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription);
+    Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription);
 
     /**
      * 处理连接关闭事件

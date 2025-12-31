@@ -82,7 +82,7 @@ public class MqttServerReceiveTest {
                                                     }
 
                                                     @Override
-                                                    public Mono<Void> onUnsubscribe(MqttUnSubscription unsubscription) {
+                                                    public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
                                                         return Mono.empty();
                                                     }
 

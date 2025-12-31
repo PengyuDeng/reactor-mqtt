@@ -26,7 +26,6 @@ import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
 import reactor.netty.NettyInbound;
 import reactor.netty.NettyOutbound;
-import reactor.netty.channel.ChannelOperations;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -35,8 +34,6 @@ import java.time.Duration;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import static org.jetlinks.reactor.mqtt.server.MqttConnectionState.*;
 
 /**
  * 基于 Reactor Netty 的 MQTT 连接实现 - 纯响应式
@@ -70,7 +67,7 @@ public class DefaultMqttConnection implements MqttConnection {
     private volatile MqttConnectMessage connectMessage;
 
     @SuppressWarnings("unused") // accessed via VarHandle
-    private volatile byte state = STATE_INIT;
+    private volatile byte state = State.INIT;
     @SuppressWarnings("unused") // accessed via VarHandle
     private volatile long lastPingTime;
     @SuppressWarnings("unused") // accessed via VarHandle
@@ -134,10 +131,10 @@ public class DefaultMqttConnection implements MqttConnection {
         byte next;
         do {
             current = (byte) STATE.get(this);
-            if (isClosed(current)) {
+            if (State.isClosed(current)) {
                 return false;
             }
-            next = setClosed(current);
+            next = State.setClosed(current);
         } while (!STATE.compareAndSet(this, current, next));
         return true;
     }
@@ -152,10 +149,10 @@ public class DefaultMqttConnection implements MqttConnection {
         byte next;
         do {
             current = (byte) STATE.get(this);
-            if (isAccepted(current)) {
+            if (State.isAccepted(current)) {
                 return false;
             }
-            next = setAccepted(current);
+            next = State.setAccepted(current);
         } while (!STATE.compareAndSet(this, current, next));
         return true;
     }
@@ -189,7 +186,7 @@ public class DefaultMqttConnection implements MqttConnection {
                 return Mono.empty();
             }
 
-            if (!isAccepted((byte) STATE.get(this))) {
+            if (!State.isAccepted((byte) STATE.get(this))) {
                 return Mono.empty();
             }
 
@@ -247,7 +244,7 @@ public class DefaultMqttConnection implements MqttConnection {
     }
 
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
-        DefaultMqttUnSubscription unsub = new DefaultMqttUnSubscription(msg, this::send);
+        DefaultMqttUnsubscription unsub = new DefaultMqttUnsubscription(msg, this::send);
 
         if (messageListener != null) {
             return messageListener.onUnsubscribe(unsub)
@@ -311,7 +308,7 @@ public class DefaultMqttConnection implements MqttConnection {
     @Override
     public Mono<Void> reject(MqttConnectReturnCode code) {
         return Mono.defer(() -> {
-            if (isClosed((byte) STATE.get(this))) {
+            if (State.isClosed((byte) STATE.get(this))) {
                 return Mono.empty();
             }
             MqttConnAckMessage connAck = MqttMessageBuilders.connAck()
@@ -378,7 +375,7 @@ public class DefaultMqttConnection implements MqttConnection {
 
     @Override
     public boolean isAlive() {
-        return !isClosed((byte) STATE.get(this)) && connection.channel().isActive();
+        return !State.isClosed((byte) STATE.get(this)) && connection.channel().isActive();
     }
 
     @Override
@@ -418,6 +415,40 @@ public class DefaultMqttConnection implements MqttConnection {
             return (InetSocketAddress) connection.channel().remoteAddress();
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /**
+     * MQTT 连接状态常量
+     *
+     * <p>使用位掩码管理连接状态，支持多状态组合。</p>
+     *
+     * <pre>
+     * 状态位布局 (byte):
+     * bit 0: CLOSED     - 连接已关闭
+     * bit 1: ACCEPTED   - 连接已被接受
+     * bit 2-7: 保留
+     * </pre>
+     */
+    private interface State {
+        byte INIT = 0;
+        byte CLOSED = 1;
+        byte ACCEPTED = 1 << 1;
+
+        static boolean isClosed(byte state) {
+            return (state & CLOSED) != 0;
+        }
+
+        static boolean isAccepted(byte state) {
+            return (state & ACCEPTED) != 0;
+        }
+
+        static byte setClosed(byte state) {
+            return (byte) (state | CLOSED);
+        }
+
+        static byte setAccepted(byte state) {
+            return (byte) (state | ACCEPTED);
         }
     }
 }

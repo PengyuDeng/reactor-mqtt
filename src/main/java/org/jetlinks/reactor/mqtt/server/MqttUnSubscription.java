@@ -24,7 +24,7 @@ import reactor.core.publisher.Mono;
  *
  * @author PengyuDeng
  */
-public interface MqttUnSubscription {
+public interface MqttUnsubscription {
 
     /**
      * 获取原始取消订阅消息

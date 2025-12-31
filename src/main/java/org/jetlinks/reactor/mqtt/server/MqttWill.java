@@ -30,11 +30,21 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 public class MqttWill {
 
     private final boolean willFlag;
+
     private final String willTopic;
+
     private final ByteBuf willMessage;
+
     private final MqttQoS willQos;
+
     private final boolean willRetain;
+
     private final MqttProperties willProperties;
+    /**
+     * 空遗言
+     */
+    public final static MqttWill EMPTY = new MqttWill(false, null, null, null, false, null);
+
 
     /**
      * 构造函数
@@ -54,13 +64,6 @@ public class MqttWill {
         this.willQos = willQos;
         this.willRetain = willRetain;
         this.willProperties = willProperties != null ? willProperties : MqttProperties.NO_PROPERTIES;
-    }
-
-    /**
-     * 创建空遗言
-     */
-    public static MqttWill empty() {
-        return new MqttWill(false, null, null, null, false, null);
     }
 
     /**
@@ -111,9 +114,9 @@ public class MqttWill {
             return "MqttWill{none}";
         }
         return "MqttWill{" +
-            "topic='" + willTopic + '\'' +
-            ", qos=" + willQos +
-            ", retain=" + willRetain +
-            '}';
+                "topic='" + willTopic + '\'' +
+                ", qos=" + willQos +
+                ", retain=" + willRetain +
+                '}';
     }
 }

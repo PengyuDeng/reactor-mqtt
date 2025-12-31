@@ -228,7 +228,7 @@ public class DefaultMqttConnection implements MqttConnection {
     @Override
     public MqttWill getWill() {
         if (connectMessage == null || !connectMessage.variableHeader().isWillFlag()) {
-            return MqttWill.empty();
+            return MqttWill.EMPTY;
         }
         byte[] willPayload = connectMessage.payload().willMessageInBytes();
         String topic = connectMessage.payload().willTopic();

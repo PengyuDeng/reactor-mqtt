@@ -204,6 +204,7 @@ public class DefaultMqttConnection implements MqttConnection {
 
     private Mono<Void> handlePublishSync(MqttPublishMessage msg) {
         if (messageListener == null) {
+            ReferenceCountUtil.release(msg);
             return Mono.empty();
         }
 
@@ -211,6 +212,7 @@ public class DefaultMqttConnection implements MqttConnection {
             ReferenceCountUtil.retain(msg);
         } catch (Exception e) {
             log.warning("Failed to retain message: " + e.getMessage());
+            ReferenceCountUtil.safeRelease(msg);
             return Mono.empty();
         }
 
@@ -219,15 +221,14 @@ public class DefaultMqttConnection implements MqttConnection {
         if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
             Mono<Void> handler = messageListener.onPublish(publishing);
             if (autoAck) {
-                return handler
-                        .then(publishing.acknowledge())
-                        .doFinally(signal -> publishing.release());
+                return handler.then(publishing.acknowledge())
+                              .doFinally(signal -> publishing.release());
             } else {
-                return handler
-                        .doFinally(signal -> publishing.release());
+                return handler.doFinally(signal -> publishing.release());
             }
         }
-        return messageListener.onPublish(publishing).doFinally(signal -> publishing.release());
+        return messageListener.onPublish(publishing)
+                              .doFinally(signal -> publishing.release());
     }
 
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {

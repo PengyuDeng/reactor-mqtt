@@ -111,7 +111,7 @@ public class DefaultMqttPublishing implements MqttPublishing {
                 ackMono = Mono.empty();
             }
 
-            return ackMono.doFinally(signal -> release());
+            return ackMono;
         });
     }
 

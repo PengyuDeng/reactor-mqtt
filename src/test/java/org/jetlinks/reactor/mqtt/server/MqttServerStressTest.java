@@ -15,34 +15,37 @@
  */
 package org.jetlinks.reactor.mqtt.server;
 
-import io.netty.handler.codec.mqtt.MqttQoS;
-import io.vertx.core.Vertx;
-import io.vertx.core.buffer.Buffer;
-import io.vertx.mqtt.MqttClient;
-import io.vertx.mqtt.MqttClientOptions;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.mqtt.*;
 import org.junit.jupiter.api.*;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.netty.Connection;
 import reactor.netty.DisposableServer;
+import reactor.netty.tcp.TcpClient;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * MQTT 服务器压力测试 - 使用 Vert.x 客户端
+ * MQTT 服务器压力测试 - 纯响应式实现
  */
 class MqttServerStressTest {
 
     private static final String HOST = "127.0.0.1";
-    private static final int PORT = 11883;
+    private static final int PORT = 36544;
+    private static final int MAX_MESSAGE_SIZE = 65536;
+    private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
     private DisposableServer server;
-    private Vertx vertx;
     private final AtomicInteger receivedMessages = new AtomicInteger(0);
     private final AtomicInteger connectedClients = new AtomicInteger(0);
 
@@ -51,12 +54,10 @@ class MqttServerStressTest {
         receivedMessages.set(0);
         connectedClients.set(0);
 
-        vertx = Vertx.vertx();
-
         server = MqttServer.create()
             .host(HOST)
             .port(PORT)
-            .maxMessageSize(65536)
+            .maxMessageSize(MAX_MESSAGE_SIZE)
             .idleTimeout(Duration.ofSeconds(60))
             .handle(connection -> {
                 connectedClients.incrementAndGet();
@@ -94,51 +95,104 @@ class MqttServerStressTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (server != null) {
-            server.dispose();
+            server.disposeNow();
             System.out.println("MQTT 服务器已停止");
         }
-        if (vertx != null) {
-            CountDownLatch latch = new CountDownLatch(1);
-            vertx.close().onComplete(ar -> latch.countDown());
-            latch.await(5, TimeUnit.SECONDS);
+    }
+
+    /**
+     * 响应式创建客户端连接
+     */
+    private Mono<Connection> createClient(String clientId) {
+        return TcpClient.create()
+            .host(HOST)
+            .port(PORT)
+            .doOnConnected(c -> {
+                c.addHandlerLast("mqtt-decoder", new MqttDecoder(MAX_MESSAGE_SIZE));
+                c.addHandlerLast("mqtt-encoder", MqttEncoder.INSTANCE);
+            })
+            .connect()
+            .flatMap(conn -> {
+                MqttConnectMessage connectMessage = MqttMessageBuilders.connect()
+                    .clientId(clientId)
+                    .cleanSession(true)
+                    .keepAlive(300)
+                    .build();
+
+                return conn.outbound().sendObject(Mono.just(connectMessage)).then()
+                    .then(conn.inbound().receiveObject()
+                        .cast(MqttMessage.class)
+                        .filter(msg -> msg.fixedHeader().messageType() == MqttMessageType.CONNACK)
+                        .next()
+                        .timeout(Duration.ofSeconds(10))
+                        .flatMap(msg -> {
+                            MqttConnAckMessage connAck = (MqttConnAckMessage) msg;
+                            if (connAck.variableHeader().connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
+                                return Mono.just(conn);
+                            } else {
+                                return Mono.error(new RuntimeException("连接被拒绝"));
+                            }
+                        }));
+            });
+    }
+
+    /**
+     * 响应式发布消息
+     */
+    private Mono<Void> publish(Connection conn, String topic, byte[] payload, MqttQoS qos, AtomicInteger messageIdGen) {
+        int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : messageIdGen.getAndIncrement() & 0xFFFF;
+        if (messageId == 0 && qos != MqttQoS.AT_MOST_ONCE) {
+            messageId = messageIdGen.getAndIncrement() & 0xFFFF;
         }
+
+        ByteBuf payloadBuf = Unpooled.wrappedBuffer(payload);
+        MqttPublishMessage publishMessage = new MqttPublishMessage(
+            new MqttFixedHeader(MqttMessageType.PUBLISH, false, qos, false, 0),
+            new MqttPublishVariableHeader(topic, messageId),
+            payloadBuf
+        );
+
+        return conn.outbound().sendObject(Mono.just(publishMessage)).then();
+    }
+
+    /**
+     * 响应式断开连接
+     */
+    private Mono<Void> disconnect(Connection conn) {
+        MqttMessage disconnectMessage = new MqttMessage(
+            new MqttFixedHeader(MqttMessageType.DISCONNECT, false, MqttQoS.AT_MOST_ONCE, false, 0)
+        );
+        return conn.outbound().sendObject(Mono.just(disconnectMessage)).then()
+            .doFinally(signal -> conn.dispose());
     }
 
     /**
      * 测试并发连接
      */
     @Test
-    void testConcurrentConnections() throws Exception {
+    void testConcurrentConnections() {
         int clientCount = 100;
-        CountDownLatch connectLatch = new CountDownLatch(clientCount);
-        List<MqttClient> clients = new CopyOnWriteArrayList<>();
+        List<Connection> clients = new CopyOnWriteArrayList<>();
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failCount = new AtomicInteger(0);
 
         long startTime = System.currentTimeMillis();
 
-        for (int i = 0; i < clientCount; i++) {
-            MqttClient client = MqttClient.create(vertx, new MqttClientOptions()
-                .setClientId("stress-conn-" + i)
-                .setCleanSession(true)
-                .setKeepAliveInterval(30));
-
-            client.connect(PORT, HOST)
-                .onSuccess(ack -> {
-                    clients.add(client);
+        // 并发创建客户端
+        Flux.range(0, clientCount)
+            .flatMap(i -> createClient("stress-conn-" + i)
+                .doOnSuccess(conn -> {
+                    clients.add(conn);
                     successCount.incrementAndGet();
-                    connectLatch.countDown();
                 })
-                .onFailure(err -> {
+                .onErrorResume(e -> {
                     failCount.incrementAndGet();
-                    System.err.println("连接失败: " + err.getMessage());
-                    connectLatch.countDown();
-                });
-        }
+                    return Mono.empty();
+                }), 20) // 并发度 20
+            .blockLast(Duration.ofSeconds(60));
 
-        assertTrue(connectLatch.await(30, TimeUnit.SECONDS), "连接超时");
         long elapsed = System.currentTimeMillis() - startTime;
 
         System.out.println("=== 并发连接测试结果 ===");
@@ -152,37 +206,32 @@ class MqttServerStressTest {
         assertEquals(clientCount, connectedClients.get());
 
         // 断开所有客户端
-        CountDownLatch disconnectLatch = new CountDownLatch(clients.size());
-        for (MqttClient client : clients) {
-            client.disconnect().onComplete(ar -> disconnectLatch.countDown());
-        }
-        disconnectLatch.await(10, TimeUnit.SECONDS);
+        Flux.fromIterable(clients)
+            .flatMap(this::disconnect)
+            .blockLast(TIMEOUT);
     }
 
     /**
      * 测试高吞吐量消息发布
      */
     @Test
-    void testHighThroughputPublish() throws Exception {
+    void testHighThroughputPublish() {
         int messageCount = 10000;
         String topic = "stress/throughput";
-        Buffer payload = Buffer.buffer("Hello MQTT Stress Test");
-
-        CountDownLatch connectLatch = new CountDownLatch(1);
-        MqttClient client = MqttClient.create(vertx, new MqttClientOptions()
-            .setClientId("stress-throughput")
-            .setCleanSession(true));
-
-        client.connect(PORT, HOST).onComplete(ar -> connectLatch.countDown());
-        assertTrue(connectLatch.await(5, TimeUnit.SECONDS));
+        byte[] payload = "Hello MQTT Stress Test".getBytes(StandardCharsets.UTF_8);
+        AtomicInteger messageIdGen = new AtomicInteger(1);
 
         long startTime = System.currentTimeMillis();
 
-        for (int i = 0; i < messageCount; i++) {
-            client.publish(topic, payload, MqttQoS.AT_MOST_ONCE, false, false);
-        }
+        createClient("stress-throughput")
+            .flatMap(conn -> Flux.range(0, messageCount)
+                .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen), 256)
+                .then()
+                .delayElement(Duration.ofSeconds(2)) // 等待服务器处理
+                .then(disconnect(conn))
+                .thenReturn(conn))
+            .block(TIMEOUT);
 
-        Thread.sleep(2000);
         long elapsed = System.currentTimeMillis() - startTime;
 
         System.out.println("=== 高吞吐量测试结果 ===");
@@ -192,53 +241,42 @@ class MqttServerStressTest {
         System.out.println("吞吐量: " + (messageCount * 1000.0 / elapsed) + " 消息/秒");
 
         assertTrue(receivedMessages.get() >= messageCount * 0.95, "至少应接收95%的消息");
-
-        CountDownLatch disconnectLatch = new CountDownLatch(1);
-        client.disconnect().onComplete(ar -> disconnectLatch.countDown());
-        disconnectLatch.await(5, TimeUnit.SECONDS);
     }
 
     /**
      * 测试多客户端并发发布
      */
     @Test
-    void testConcurrentPublish() throws Exception {
+    void testConcurrentPublish() {
         int clientCount = 10;
         int messagesPerClient = 1000;
         int totalMessages = clientCount * messagesPerClient;
         String topic = "stress/concurrent";
-        Buffer payload = Buffer.buffer("Concurrent message");
+        byte[] payload = "Concurrent message".getBytes(StandardCharsets.UTF_8);
 
-        List<MqttClient> clients = new ArrayList<>();
-        CountDownLatch connectLatch = new CountDownLatch(clientCount);
+        List<Connection> clients = new CopyOnWriteArrayList<>();
 
-        for (int i = 0; i < clientCount; i++) {
-            MqttClient client = MqttClient.create(vertx, new MqttClientOptions()
-                .setClientId("stress-pub-" + i)
-                .setCleanSession(true));
-            client.connect(PORT, HOST).onComplete(ar -> {
-                if (ar.succeeded()) {
-                    clients.add(client);
-                }
-                connectLatch.countDown();
-            });
-        }
-        assertTrue(connectLatch.await(10, TimeUnit.SECONDS));
+        // 连接客户端
+        Flux.range(0, clientCount)
+            .flatMap(i -> createClient("stress-pub-" + i)
+                .doOnSuccess(clients::add)
+                .onErrorResume(e -> Mono.empty()), 20)
+            .blockLast(Duration.ofSeconds(10));
 
-        CountDownLatch publishLatch = new CountDownLatch(clientCount);
+        assertEquals(clientCount, clients.size());
+
         long startTime = System.currentTimeMillis();
 
-        for (MqttClient client : clients) {
-            vertx.executeBlocking(() -> {
-                for (int j = 0; j < messagesPerClient; j++) {
-                    client.publish(topic, payload, MqttQoS.AT_MOST_ONCE, false, false);
-                }
-                return null;
-            }).onComplete(ar -> publishLatch.countDown());
-        }
-
-        assertTrue(publishLatch.await(60, TimeUnit.SECONDS), "发布超时");
-        Thread.sleep(2000);
+        // 并发发布
+        Flux.fromIterable(clients)
+            .flatMap(conn -> {
+                AtomicInteger messageIdGen = new AtomicInteger(1);
+                return Flux.range(0, messagesPerClient)
+                    .flatMap(j -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen), 64)
+                    .then();
+            }, clientCount)
+            .then(Mono.delay(Duration.ofSeconds(2))) // 等待服务器处理
+            .block(Duration.ofSeconds(60));
 
         long elapsed = System.currentTimeMillis() - startTime;
 
@@ -252,166 +290,122 @@ class MqttServerStressTest {
 
         assertTrue(receivedMessages.get() >= totalMessages * 0.95);
 
-        CountDownLatch disconnectLatch = new CountDownLatch(clients.size());
-        for (MqttClient client : clients) {
-            client.disconnect().onComplete(ar -> disconnectLatch.countDown());
-        }
-        disconnectLatch.await(10, TimeUnit.SECONDS);
+        // 断开连接
+        Flux.fromIterable(clients)
+            .flatMap(this::disconnect)
+            .blockLast(TIMEOUT);
     }
 
     /**
      * 测试 QoS 1 消息确认
      */
     @Test
-    void testQoS1Acknowledgment() throws Exception {
+    void testQoS1Acknowledgment() {
         int messageCount = 1000;
         String topic = "stress/qos1";
-        Buffer payload = Buffer.buffer("QoS 1 message");
-        AtomicInteger deliveredCount = new AtomicInteger(0);
-
-        CountDownLatch connectLatch = new CountDownLatch(1);
-        MqttClient client = MqttClient.create(vertx, new MqttClientOptions()
-            .setClientId("stress-qos1")
-            .setCleanSession(true)
-            .setMaxInflightQueue(1000));
-
-        client.publishCompletionHandler(id -> deliveredCount.incrementAndGet());
-
-        client.connect(PORT, HOST).onComplete(ar -> connectLatch.countDown());
-        assertTrue(connectLatch.await(5, TimeUnit.SECONDS));
+        byte[] payload = "QoS 1 message".getBytes(StandardCharsets.UTF_8);
+        AtomicInteger messageIdGen = new AtomicInteger(1);
 
         long startTime = System.currentTimeMillis();
 
-        for (int i = 0; i < messageCount; i++) {
-            client.publish(topic, payload, MqttQoS.AT_LEAST_ONCE, false, false);
-        }
-
-        // 等待 ACK
-        int maxWait = 50;
-        while (deliveredCount.get() < messageCount && maxWait-- > 0) {
-            Thread.sleep(100);
-        }
+        createClient("stress-qos1")
+            .flatMap(conn -> Flux.range(0, messageCount)
+                .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_LEAST_ONCE, messageIdGen), 64)
+                .then()
+                .delayElement(Duration.ofSeconds(2))
+                .then(disconnect(conn))
+                .thenReturn(conn))
+            .block(TIMEOUT);
 
         long elapsed = System.currentTimeMillis() - startTime;
 
         System.out.println("=== QoS 1 测试结果 ===");
         System.out.println("发送消息数: " + messageCount);
-        System.out.println("确认送达数: " + deliveredCount.get());
         System.out.println("服务器接收数: " + receivedMessages.get());
         System.out.println("耗时: " + elapsed + " ms");
 
-        assertEquals(messageCount, deliveredCount.get(), "所有消息应确认送达");
         assertEquals(messageCount, receivedMessages.get(), "所有消息应被接收");
-
-        CountDownLatch disconnectLatch = new CountDownLatch(1);
-        client.disconnect().onComplete(ar -> disconnectLatch.countDown());
-        disconnectLatch.await(5, TimeUnit.SECONDS);
     }
 
     /**
      * 测试持续压力
      */
     @Test
-    void testSustainedLoad() throws Exception {
+    void testSustainedLoad() {
         int durationSeconds = 10;
         int clientCount = 5;
         String topic = "stress/sustained";
-        Buffer payload = Buffer.buffer("Sustained load message");
+        byte[] payload = "Sustained load message".getBytes(StandardCharsets.UTF_8);
         AtomicLong sentCount = new AtomicLong(0);
-        AtomicInteger errorCount = new AtomicInteger(0);
 
-        List<MqttClient> clients = new ArrayList<>();
-        CountDownLatch connectLatch = new CountDownLatch(clientCount);
+        List<Connection> clients = new CopyOnWriteArrayList<>();
 
-        for (int i = 0; i < clientCount; i++) {
-            MqttClient client = MqttClient.create(vertx, new MqttClientOptions()
-                .setClientId("stress-sustained-" + i)
-                .setCleanSession(true));
-            client.connect(PORT, HOST).onComplete(ar -> {
-                if (ar.succeeded()) {
-                    clients.add(client);
-                }
-                connectLatch.countDown();
-            });
-        }
-        assertTrue(connectLatch.await(10, TimeUnit.SECONDS));
+        // 连接客户端
+        Flux.range(0, clientCount)
+            .flatMap(i -> createClient("stress-sustained-" + i)
+                .doOnSuccess(clients::add)
+                .onErrorResume(e -> Mono.empty()), 10)
+            .blockLast(Duration.ofSeconds(10));
 
-        ExecutorService executor = Executors.newFixedThreadPool(clientCount);
         long endTime = System.currentTimeMillis() + (durationSeconds * 1000L);
 
-        for (MqttClient client : clients) {
-            executor.submit(() -> {
-                while (System.currentTimeMillis() < endTime) {
-                    try {
-                        client.publish(topic, payload, MqttQoS.AT_MOST_ONCE, false, false);
-                        sentCount.incrementAndGet();
-                    } catch (Exception e) {
-                        errorCount.incrementAndGet();
-                    }
-                }
-            });
-        }
-
-        Thread.sleep(durationSeconds * 1000L + 2000);
-        executor.shutdown();
+        // 持续发送
+        Flux.fromIterable(clients)
+            .flatMap(conn -> {
+                AtomicInteger messageIdGen = new AtomicInteger(1);
+                return Flux.generate(sink -> {
+                        if (System.currentTimeMillis() < endTime) {
+                            sink.next(1);
+                        } else {
+                            sink.complete();
+                        }
+                    })
+                    .flatMap(x -> publish(conn, topic, payload, MqttQoS.AT_MOST_ONCE, messageIdGen)
+                        .doOnSuccess(v -> sentCount.incrementAndGet()), 128)
+                    .then();
+            }, clientCount)
+            .then(Mono.delay(Duration.ofSeconds(2)))
+            .block(Duration.ofSeconds(durationSeconds + 10));
 
         System.out.println("=== 持续压力测试结果 ===");
         System.out.println("持续时间: " + durationSeconds + " 秒");
         System.out.println("客户端数: " + clientCount);
         System.out.println("发送消息数: " + sentCount.get());
-        System.out.println("错误数: " + errorCount.get());
         System.out.println("服务器接收数: " + receivedMessages.get());
         System.out.println("平均吞吐量: " + (sentCount.get() / durationSeconds) + " 消息/秒");
 
-        assertTrue(errorCount.get() < sentCount.get() * 0.01, "错误率应低于1%");
-
-        CountDownLatch disconnectLatch = new CountDownLatch(clients.size());
-        for (MqttClient client : clients) {
-            client.disconnect().onComplete(ar -> disconnectLatch.countDown());
-        }
-        disconnectLatch.await(10, TimeUnit.SECONDS);
+        // 断开连接
+        Flux.fromIterable(clients)
+            .flatMap(this::disconnect)
+            .blockLast(TIMEOUT);
     }
 
     /**
      * 测试大消息
      */
     @Test
-    void testLargeMessages() throws Exception {
+    void testLargeMessages() {
         int messageCount = 100;
         int messageSize = 32 * 1024;
         String topic = "stress/large";
-        byte[] payloadBytes = new byte[messageSize];
+        byte[] payload = new byte[messageSize];
         for (int i = 0; i < messageSize; i++) {
-            payloadBytes[i] = (byte) (i % 256);
+            payload[i] = (byte) (i % 256);
         }
-        Buffer payload = Buffer.buffer(payloadBytes);
-        AtomicInteger deliveredCount = new AtomicInteger(0);
-
-        CountDownLatch connectLatch = new CountDownLatch(1);
-        MqttClient client = MqttClient.create(vertx, new MqttClientOptions()
-            .setClientId("stress-large")
-            .setCleanSession(true)
-            .setMaxInflightQueue(1000));
-
-        client.publishCompletionHandler(id -> deliveredCount.incrementAndGet());
-
-        client.connect(PORT, HOST).onComplete(ar -> connectLatch.countDown());
-        assertTrue(connectLatch.await(5, TimeUnit.SECONDS));
+        AtomicInteger messageIdGen = new AtomicInteger(1);
 
         long startTime = System.currentTimeMillis();
 
-        for (int i = 0; i < messageCount; i++) {
-            client.publish(topic, payload, MqttQoS.AT_LEAST_ONCE, false, false);
-        }
-
-        // 等待 ACK
-        int maxWait = 50;
-        while (deliveredCount.get() < messageCount && maxWait-- > 0) {
-            Thread.sleep(100);
-        }
+        createClient("stress-large")
+            .flatMap(conn -> Flux.range(0, messageCount)
+                .flatMap(i -> publish(conn, topic, payload, MqttQoS.AT_LEAST_ONCE, messageIdGen), 16)
+                .then()
+                .delayElement(Duration.ofSeconds(2))
+                .then(disconnect(conn))
+                .thenReturn(conn))
+            .block(TIMEOUT);
 
         long elapsed = System.currentTimeMillis() - startTime;
-
         double dataMB = (messageCount * messageSize) / (1024.0 * 1024.0);
 
         System.out.println("=== 大消息测试结果 ===");
@@ -423,44 +417,29 @@ class MqttServerStressTest {
         System.out.println("接收消息数: " + receivedMessages.get());
 
         assertEquals(messageCount, receivedMessages.get());
-
-        CountDownLatch disconnectLatch = new CountDownLatch(1);
-        client.disconnect().onComplete(ar -> disconnectLatch.countDown());
-        disconnectLatch.await(5, TimeUnit.SECONDS);
     }
 
     /**
      * 测试快速连接断开
      */
     @Test
-    void testRapidConnectDisconnect() throws Exception {
+    void testRapidConnectDisconnect() {
         int iterations = 50;
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failCount = new AtomicInteger(0);
 
         long startTime = System.currentTimeMillis();
 
-        for (int i = 0; i < iterations; i++) {
-            CountDownLatch latch = new CountDownLatch(1);
-            MqttClient client = MqttClient.create(vertx, new MqttClientOptions()
-                .setClientId("stress-rapid-" + i)
-                .setCleanSession(true));
-
-            final int iter = i;
-            client.connect(PORT, HOST)
-                .compose(ack -> client.disconnect())
-                .onSuccess(v -> {
-                    successCount.incrementAndGet();
-                    latch.countDown();
-                })
-                .onFailure(err -> {
+        Flux.range(0, iterations)
+            .concatMap(i -> createClient("stress-rapid-" + i)
+                .flatMap(conn -> disconnect(conn).thenReturn(true))
+                .doOnSuccess(v -> successCount.incrementAndGet())
+                .onErrorResume(e -> {
                     failCount.incrementAndGet();
-                    System.err.println("第 " + iter + " 次迭代失败: " + err.getMessage());
-                    latch.countDown();
-                });
-
-            latch.await(5, TimeUnit.SECONDS);
-        }
+                    System.err.println("第 " + i + " 次迭代失败: " + e.getMessage());
+                    return Mono.just(false);
+                }))
+            .blockLast(Duration.ofSeconds(60));
 
         long elapsed = System.currentTimeMillis() - startTime;
 

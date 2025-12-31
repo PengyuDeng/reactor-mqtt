@@ -15,8 +15,6 @@
  */
 package org.jetlinks.reactor.mqtt.server;
 
-import org.eclipse.paho.client.mqttv3.MqttClient;
-import org.eclipse.paho.client.mqttv3.MqttException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -25,7 +23,6 @@ import reactor.netty.DisposableServer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -51,13 +48,24 @@ class MqttAutoAckTest {
     }
 
     /**
+     * 创建 MQTT 客户端
+     *
+     * @param clientId 客户端 ID
+     * @return 已连接的 ReactorMqttClient 实例
+     */
+    private ReactorMqttClient createClient(String clientId) {
+        ReactorMqttClient client = new ReactorMqttClient(HOST, PORT, clientId);
+        client.connect();
+        return client;
+    }
+
+    /**
      * 测试自动应答模式（默认）
      * QoS1 消息处理完成后自动发送 PUBACK
      */
     @Test
     void testAutoAckDefault() throws Exception {
         AtomicReference<String> receivedPayload = new AtomicReference<>();
-        AtomicBoolean ackCalled = new AtomicBoolean(false);
         CountDownLatch latch = new CountDownLatch(1);
 
         server = MqttServer.create()
@@ -91,8 +99,7 @@ class MqttAutoAckTest {
                 }).accept())
             .bindNow();
 
-        MqttClient client = new MqttClient("tcp://" + HOST + ":" + PORT, "auto-ack-client");
-        client.connect();
+        ReactorMqttClient client = createClient("auto-ack-client");
 
         // 发送 QoS1 消息，如果自动应答正常，客户端不会超时
         client.publish("test/auto-ack", "auto-ack-message".getBytes(), 1, false);
@@ -141,8 +148,7 @@ class MqttAutoAckTest {
                 }).accept())
             .bindNow();
 
-        MqttClient client = new MqttClient("tcp://" + HOST + ":" + PORT, "auto-ack-explicit-client");
-        client.connect();
+        ReactorMqttClient client = createClient("auto-ack-explicit-client");
 
         // 发送多条 QoS1 消息
         for (int i = 0; i < 3; i++) {
@@ -196,8 +202,7 @@ class MqttAutoAckTest {
                 }).accept())
             .bindNow();
 
-        MqttClient client = new MqttClient("tcp://" + HOST + ":" + PORT, "manual-ack-client");
-        client.connect();
+        ReactorMqttClient client = createClient("manual-ack-client");
 
         // 发送 QoS1 消息
         client.publish("test/manual-ack", "manual-ack-message".getBytes(), 1, false);
@@ -249,8 +254,7 @@ class MqttAutoAckTest {
                 }).accept())
             .bindNow();
 
-        MqttClient client = new MqttClient("tcp://" + HOST + ":" + PORT, "manual-ack-qos2-client");
-        client.connect();
+        ReactorMqttClient client = createClient("manual-ack-qos2-client");
 
         // 发送 QoS2 消息
         client.publish("test/manual-ack-qos2", "qos2-message".getBytes(), 2, false);
@@ -301,8 +305,7 @@ class MqttAutoAckTest {
                 }).accept())
             .bindNow();
 
-        MqttClient client = new MqttClient("tcp://" + HOST + ":" + PORT, "qos0-client");
-        client.connect();
+        ReactorMqttClient client = createClient("qos0-client");
 
         // 发送 QoS0 消息
         client.publish("test/qos0", "message1".getBytes(), 0, false);
@@ -354,8 +357,7 @@ class MqttAutoAckTest {
                 }).accept())
             .bindNow();
 
-        MqttClient client = new MqttClient("tcp://" + HOST + ":" + PORT, "multi-msg-client");
-        client.connect();
+        ReactorMqttClient client = createClient("multi-msg-client");
 
         // 发送多条 QoS1 消息
         for (int i = 0; i < expectedCount; i++) {

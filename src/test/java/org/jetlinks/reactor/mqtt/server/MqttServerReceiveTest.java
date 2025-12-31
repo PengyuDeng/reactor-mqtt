@@ -67,6 +67,7 @@ public class MqttServerReceiveTest {
             .idleTimeout(Duration.ofSeconds(IDLE_TIMEOUT_SECONDS))
             .handle(connection -> {
                 connectedClients.increment();
+                System.out.println("客户端连接: " + connection.getClientId() + " 来自 " + connection.getClientAddress());
 
                 return connection.listener(new MqttMessageListener() {
                     @Override
@@ -88,6 +89,7 @@ public class MqttServerReceiveTest {
                     @Override
                     public Mono<Void> onDisconnect(MqttConnection conn) {
                         connectedClients.decrement();
+                        System.out.println("客户端断开: " + conn.getClientId());
                         return Mono.empty();
                     }
                 }).accept();

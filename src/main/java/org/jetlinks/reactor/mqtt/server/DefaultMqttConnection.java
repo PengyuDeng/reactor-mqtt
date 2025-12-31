@@ -116,8 +116,9 @@ public class DefaultMqttConnection implements MqttConnection {
     private Flux<Void> handleInbound() {
         return connection.inbound()
                          .receiveObject()
+                         .onBackpressureDrop(drop -> System.out.println("drop = " + drop))
                          .cast(MqttMessage.class)
-                         .flatMap(this::handleMqttMessageSync);
+                         .concatMap(this::handleMqttMessageSync);
     }
 
     /**

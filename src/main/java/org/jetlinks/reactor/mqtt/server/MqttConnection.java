@@ -100,6 +100,30 @@ public interface MqttConnection {
     MqttConnection listener(MqttMessageListener listener);
 
     /**
+     * 设置是否自动应答 QoS > 0 的消息
+     * <p>
+     * 当设置为 true（默认）时，服务端在 {@link MqttMessageListener#onPublish} 处理完成后自动发送 ACK。
+     * 当设置为 false 时，需要处理者手动调用 {@link MqttPublishing#acknowledge()} 进行应答。
+     * </p>
+     *
+     * <p>手动应答示例：</p>
+     * <pre>{@code
+     * connection.autoAck(false)
+     *           .listener(new MqttMessageListener() {
+     *               @Override
+     *               public Mono<Void> onPublish(MqttPublishing message) {
+     *                   return saveToDatabase(message)
+     *                       .then(message.acknowledge());  // 持久化成功后再应答
+     *               }
+     *           });
+     * }</pre>
+     *
+     * @param autoAck true 自动应答（默认），false 手动应答
+     * @return 当前连接实例（支持链式调用）
+     */
+    MqttConnection autoAck(boolean autoAck);
+
+    /**
      * 发布消息到客户端
      */
     Mono<Void> publish(MqttPublishMessage message);

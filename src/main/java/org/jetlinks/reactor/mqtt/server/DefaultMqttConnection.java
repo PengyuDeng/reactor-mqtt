@@ -20,6 +20,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
 import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
@@ -75,6 +76,7 @@ public class DefaultMqttConnection implements MqttConnection {
     private final Sinks.Empty<Void> disposeSink = Sinks.empty();
 
     private volatile MqttMessageListener messageListener;
+    private volatile boolean autoAck = true;
 
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
@@ -93,11 +95,12 @@ public class DefaultMqttConnection implements MqttConnection {
             }
         });
 
-        startInboundHandling();
+        startInboundHandling().subscribe();
     }
 
     /**
      * CAS 设置关闭状态
+     *
      * @return true 如果状态变更成功（之前未关闭）
      */
     private boolean casSetClosed() {
@@ -115,6 +118,7 @@ public class DefaultMqttConnection implements MqttConnection {
 
     /**
      * CAS 设置接受状态
+     *
      * @return true 如果状态变更成功（之前未接受）
      */
     private boolean casSetAccepted() {
@@ -144,12 +148,11 @@ public class DefaultMqttConnection implements MqttConnection {
         }
     }
 
-    private void startInboundHandling() {
-        connection.inbound()
-                  .receiveObject()
-                  .cast(MqttMessage.class)
-                  .flatMap(this::handleMqttMessageSync)
-                  .subscribe();
+    private Flux<Void> startInboundHandling() {
+        return connection.inbound()
+                         .receiveObject()
+                         .cast(MqttMessage.class)
+                         .flatMap(this::handleMqttMessageSync);
     }
 
     private Mono<Void> handleMqttMessageSync(MqttMessage msg) {
@@ -193,9 +196,15 @@ public class DefaultMqttConnection implements MqttConnection {
 
         if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
             ReferenceCountUtil.retain(msg);
-            return messageListener.onPublish(publishing)
-                                  .then(publishing.acknowledge())
-                                  .doFinally(signal -> publishing.release());
+            Mono<Void> handler = messageListener.onPublish(publishing);
+            if (autoAck) {
+                return handler
+                        .then(publishing.acknowledge())
+                        .doFinally(signal -> publishing.release());
+            } else {
+                return handler
+                        .doFinally(signal -> publishing.release());
+            }
         }
         return messageListener.onPublish(publishing);
     }
@@ -322,6 +331,12 @@ public class DefaultMqttConnection implements MqttConnection {
     @Override
     public MqttConnection listener(MqttMessageListener listener) {
         this.messageListener = listener;
+        return this;
+    }
+
+    @Override
+    public MqttConnection autoAck(boolean autoAck) {
+        this.autoAck = autoAck;
         return this;
     }
 

@@ -70,7 +70,7 @@ public interface MqttPublishing {
     /**
      * 获取原始 MQTT 消息
      */
-    MqttPublishMessage getMessage();
+    MqttPublishMessage getOrigin();
 
     /**
      * 确认消息（发送 ACK）

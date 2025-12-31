@@ -17,6 +17,7 @@ package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.channel.ChannelOption;
 import io.netty.channel.WriteBufferWaterMark;
+import io.netty.handler.codec.mqtt.MqttConnectReturnCode;
 import io.netty.handler.codec.mqtt.MqttDecoder;
 import io.netty.handler.codec.mqtt.MqttEncoder;
 import io.netty.handler.ssl.SslContext;
@@ -264,57 +265,51 @@ public class MqttServer {
     }
 
     private TcpServer createTcpServer() {
-        final int maxMsgSize = this.maxMessageSize;
-        final long idleTimeoutSeconds = this.idleTimeout != null ? this.idleTimeout.toSeconds() : 0;
-        final LoopResources loops = this.loopResources != null
-                ? this.loopResources
+        TcpServer server = TcpServer.create()
+                                    .host(host)
+                                    .port(port)
+                                    .runOn(getLoopResources())
+                                    .option(ChannelOption.SO_REUSEADDR, true)
+                                    .option(ChannelOption.SO_BACKLOG, soBacklog)
+                                    .childOption(ChannelOption.TCP_NODELAY, tcpNoDelay)
+                                    .childOption(ChannelOption.SO_KEEPALIVE, tcpKeepAlive)
+                                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(writeBufferLow, writeBufferHigh))
+                                    .doOnConnection(this::initPipeline)
+                                    .handle((inbound, outbound) -> handleConnection((reactor.netty.Connection) inbound));
+
+        return sslContext != null
+                ? server.secure(spec -> spec.sslContext(sslContext))
+                : server;
+    }
+
+    private LoopResources getLoopResources() {
+        return loopResources != null
+                ? loopResources
                 : LoopResources.create("mqtt-", workerCount, true);
-        final Function<MqttConnection, Mono<Void>> handler = this.connectionHandler;
-        final SslContext ssl = this.sslContext;
+    }
 
-        TcpServer server = TcpServer
-                .create()
-                .host(host)
-                .port(port)
-                .runOn(loops)
-                .option(ChannelOption.SO_REUSEADDR, true)
-                .option(ChannelOption.SO_BACKLOG, soBacklog)
-                .childOption(ChannelOption.TCP_NODELAY, tcpNoDelay)
-                .childOption(ChannelOption.SO_KEEPALIVE, tcpKeepAlive)
-                .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(writeBufferLow, writeBufferHigh));
+    private void initPipeline(reactor.netty.Connection connection) {
+        connection.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
+        connection.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
 
-        if (ssl != null) {
-            server = server.secure(spec -> spec.sslContext(ssl));
+        if (idleTimeout != null && !idleTimeout.isZero()) {
+            connection.addHandlerFirst("idleStateHandler",
+                                       new IdleStateHandler(0, 0, idleTimeout.toSeconds(), TimeUnit.SECONDS));
         }
+    }
 
-        return server
-                .doOnConnection(nettyConnection -> {
-                    nettyConnection.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
-                    nettyConnection.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMsgSize));
+    private Mono<Void> handleConnection(reactor.netty.Connection nettyConnection) {
+        return new DefaultMqttConnection(nettyConnection).run(this::invokeHandler);
+    }
 
-                    if (idleTimeoutSeconds > 0) {
-                        nettyConnection.addHandlerFirst("idleStateHandler",
-                                                        new IdleStateHandler(0, 0, idleTimeoutSeconds, TimeUnit.SECONDS));
-                    }
-
-                    DefaultMqttConnection mqttConnection = new DefaultMqttConnection(nettyConnection);
-
-                    mqttConnection.awaitConnect()
-                                  .flatMap(connectMsg -> handler != null
-                                          ? handler.apply(mqttConnection)
-                                                   .onErrorResume(err -> {
-                                                       log.log(Level.SEVERE, "处理 MQTT 连接时出错: " + err.getMessage(), err);
-                                                       return mqttConnection.reject(
-                                                               io.netty.handler.codec.mqtt.MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
-                                                   })
-                                          : mqttConnection.accept())
-                                  .onErrorResume(err -> {
-                                      if (log.isLoggable(Level.FINE)) {
-                                          log.fine("接收 CONNECT 消息失败: " + err.getMessage());
-                                      }
-                                      return mqttConnection.close();
-                                  })
-                                  .subscribe();
-                });
+    private Mono<Void> invokeHandler(MqttConnection mqttConnection) {
+        if (connectionHandler == null) {
+            return mqttConnection.accept();
+        }
+        return connectionHandler.apply(mqttConnection)
+                                .onErrorResume(err -> {
+                                    log.log(Level.SEVERE, "处理 MQTT 连接时出错: " + err.getMessage(), err);
+                                    return mqttConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
+                                });
     }
 }

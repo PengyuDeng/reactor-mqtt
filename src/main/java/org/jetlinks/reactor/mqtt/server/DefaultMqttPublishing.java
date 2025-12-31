@@ -18,8 +18,6 @@ package org.jetlinks.reactor.mqtt.server;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
-import org.reactivestreams.Publisher;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -85,7 +83,7 @@ public class DefaultMqttPublishing implements MqttPublishing {
     }
 
     @Override
-    public MqttPublishMessage getMessage() {
+    public MqttPublishMessage getOrigin() {
         return message;
     }
 

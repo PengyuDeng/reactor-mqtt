@@ -30,6 +30,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -87,15 +88,36 @@ public class DefaultMqttConnection implements MqttConnection {
 
         connection.onDispose(() -> {
             if (casSetClosed()) {
-                // 触发响应式 listener 的 onDisconnect
                 if (messageListener != null) {
                     messageListener.onDisconnect(this).subscribe();
                 }
                 emitEmpty(disposeSink);
             }
         });
+    }
 
-        startInboundHandling().subscribe();
+    /**
+     * 启动连接处理流程
+     *
+     * @param handler 连接处理器
+     * @return 连接完整生命周期的 Mono
+     */
+    public Mono<Void> run(Function<MqttConnection, Mono<Void>> handler) {
+        return handleInbound()
+                .mergeWith(awaitConnect()
+                                   .flatMap(msg -> handler != null ? handler.apply(this) : accept())
+                                   .onErrorResume(err -> close()))
+                .then(onDispose());
+    }
+
+    /**
+     * 启动消息处理流程（用于 handle 模式）
+     */
+    private Flux<Void> handleInbound() {
+        return connection.inbound()
+                         .receiveObject()
+                         .cast(MqttMessage.class)
+                         .flatMap(this::handleMqttMessageSync);
     }
 
     /**
@@ -148,13 +170,6 @@ public class DefaultMqttConnection implements MqttConnection {
         }
     }
 
-    private Flux<Void> startInboundHandling() {
-        return connection.inbound()
-                         .receiveObject()
-                         .cast(MqttMessage.class)
-                         .flatMap(this::handleMqttMessageSync);
-    }
-
     private Mono<Void> handleMqttMessageSync(MqttMessage msg) {
         return Mono.defer(() -> {
             LAST_PING_TIME.set(this, System.currentTimeMillis());
@@ -192,10 +207,16 @@ public class DefaultMqttConnection implements MqttConnection {
             return Mono.empty();
         }
 
+        try {
+            ReferenceCountUtil.retain(msg);
+        } catch (Exception e) {
+            log.warning("Failed to retain message: " + e.getMessage());
+            return Mono.empty();
+        }
+
         DefaultMqttPublishing publishing = new DefaultMqttPublishing(msg, clientId, this::send);
 
         if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
-            ReferenceCountUtil.retain(msg);
             Mono<Void> handler = messageListener.onPublish(publishing);
             if (autoAck) {
                 return handler
@@ -206,7 +227,7 @@ public class DefaultMqttConnection implements MqttConnection {
                         .doFinally(signal -> publishing.release());
             }
         }
-        return messageListener.onPublish(publishing);
+        return messageListener.onPublish(publishing).doFinally(signal -> publishing.release());
     }
 
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {
@@ -362,6 +383,9 @@ public class DefaultMqttConnection implements MqttConnection {
                 return Mono.empty();
             }
             return Mono.fromRunnable(() -> {
+                if (messageListener != null) {
+                    messageListener.onDisconnect(this).subscribe();
+                }
                 emitEmpty(disposeSink);
                 connection.dispose();
             });

@@ -72,37 +72,82 @@ import java.util.function.Function;
  */
 public class MqttClient {
 
+    // ==================== 连接配置 ====================
+
+    /** MQTT 服务器主机地址,默认 127.0.0.1 */
     private String host = "127.0.0.1";
+
+    /** MQTT 服务器端口,默认 1883 */
     private int port = 1883;
+
+    /** MQTT 客户端 ID,为 null 时自动生成 */
     private String clientId;
+
+    /** MQTT 连接用户名,可选 */
     private String username;
+
+    /** MQTT 连接密码,可选 */
     private byte[] password;
+
+    /** MQTT Keep Alive 时间(秒),默认 60 秒 */
     private int keepAliveSeconds = 60;
+
+    /** 是否使用 Clean Session,默认 true */
     private boolean cleanSession = true;
+
+    /** MQTT 协议版本,默认 MQTT 3.1.1 */
     private int protocolVersion = MqttVersion.MQTT_3_1_1.protocolLevel();
+
+    /** MQTT 消息最大大小(字节),默认 8096 */
     private int maxMessageSize = 8096;
 
-    // 遗言
+    // ==================== 遗言配置 ====================
+
+    /** 遗言消息的主题 */
     private String willTopic;
+
+    /** 遗言消息的负载内容 */
     private ByteBuf willPayload;
+
+    /** 遗言消息的 QoS 级别,默认 QoS 0 */
     private MqttQoS willQos = MqttQoS.AT_MOST_ONCE;
+
+    /** 遗言消息是否保留,默认 false */
     private boolean willRetain = false;
 
-    // SSL
+    // ==================== SSL 配置 ====================
+
+    /** SSL 上下文,用于加密连接,为 null 时使用明文连接 */
     private SslContext sslContext;
 
-    // 重连
+    // ==================== 重连配置 ====================
+
+    /** 重连策略,默认不重连 */
     private ReconnectStrategy reconnectStrategy = ReconnectStrategy.none();
+
+    /** 重连后是否自动重新订阅之前的主题,默认 true */
     private boolean autoResubscribe = true;
 
-    // 消息处理
+    // ==================== 消息处理配置 ====================
+
+    /** 全局消息发布处理器,接收所有订阅的消息 */
     private Function<MqttClientPublishing, Mono<Void>> publishingHandler;
+
+    /** 是否自动确认 QoS 1/2 消息,默认 true */
     private boolean autoAck = true;
+
+    /** 默认 QoS 级别,用于 publish 和 subscribe 方法未指定 QoS 时,默认 QoS 0 */
     private MqttQoS qos = MqttQoS.AT_MOST_ONCE;
 
-    // 网络配置
+    // ==================== 网络配置 ====================
+
+    /** Netty EventLoop 资源,为 null 时使用默认 */
     private LoopResources loopResources;
+
+    /** 是否启用 TCP_NODELAY(禁用 Nagle 算法),默认 true */
     private boolean tcpNoDelay = true;
+
+    /** TCP 连接超时时间,默认 10 秒 */
     private Duration connectTimeout = Duration.ofSeconds(10);
 
     private MqttClient() {

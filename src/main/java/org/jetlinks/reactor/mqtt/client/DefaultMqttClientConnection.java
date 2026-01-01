@@ -28,7 +28,6 @@ import reactor.netty.Connection;
 import reactor.netty.tcp.TcpClient;
 
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -40,7 +39,6 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 /**
  * MQTT 客户端连接实现
@@ -51,53 +49,182 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private static final Logger log = Logger.getLogger(DefaultMqttClientConnection.class.getName());
 
+    // ==================== 连接配置 ====================
+
+    /**
+     * Netty TCP 连接,使用 volatile 保证重连时的可见性
+     */
     private volatile Connection connection;
+
+    /**
+     * MQTT 客户端 ID,用于标识客户端
+     */
     private final String clientId;
+
+    /**
+     * MQTT 连接用户名,可选
+     */
     private final String username;
+
+    /**
+     * MQTT 连接密码,可选
+     */
     private final byte[] password;
+
+    /**
+     * MQTT Keep Alive 时间(秒),用于心跳检测
+     */
     private final int keepAliveSeconds;
+
+    /**
+     * 是否使用 Clean Session,true 时服务器不保留会话状态
+     */
     private final boolean cleanSession;
+
+    /**
+     * MQTT 协议版本(3 或 5)
+     */
     private final int protocolVersion;
 
-    // 遗言
+    // ==================== 遗言配置 ====================
+
+    /**
+     * 遗言消息的主题,客户端异常断开时发送
+     */
     private final String willTopic;
+
+    /**
+     * 遗言消息的负载内容
+     */
     private final ByteBuf willPayload;
+
+    /**
+     * 遗言消息的 QoS 级别
+     */
     private final MqttQoS willQos;
+
+    /**
+     * 遗言消息是否保留
+     */
     private final boolean willRetain;
 
-    // 消息处理
-    private final Function<MqttClientPublishing, Mono<Void>> publishingHandler;
-    private final boolean autoAck;
-    private final MqttQoS defaultQos;
+    // ==================== 消息处理配置 ====================
 
-    // 重连
+    /**
+     * 全局消息发布处理器,接收所有订阅的消息
+     */
+    private final Function<MqttClientPublishing, Mono<Void>> publishingHandler;
+
+    /**
+     * 是否自动确认(Acknowledge)消息,QoS > 0 时有效
+     */
+    private final boolean autoAck;
+
+    /**
+     * 默认发布消息的 QoS 级别
+     */
+    private final MqttQoS qos;
+
+    // ==================== 重连配置 ====================
+
+    /**
+     * 重连策略,决定重连延迟时间
+     */
     private final ReconnectStrategy reconnectStrategy;
+
+    /**
+     * 重连后是否自动重新订阅之前的主题
+     */
     private final boolean autoResubscribe;
+
+    /**
+     * TCP 客户端提供者,用于创建新连接
+     */
     private final Supplier<TcpClient> tcpClientSupplier;
+
+    /**
+     * 当前重连尝试次数,成功连接后重置为 0
+     */
     private final AtomicInteger reconnectAttempt = new AtomicInteger(0);
+
+    /**
+     * 是否正在重连中,防止并发重连
+     */
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
 
-    // 状态
-    private final AtomicBoolean connected = new AtomicBoolean(false);
-    private final AtomicBoolean closed = new AtomicBoolean(false);
-    private final Sinks.Empty<Void> closeSink = Sinks.empty();
-    private final Sinks.One<MqttConnAckMessage> connAckSink = Sinks.one();
+    // ==================== 连接状态 ====================
 
-    // 消息 ID 生成
+    /**
+     * 是否已连接,true 表示 CONNACK 已接收且连接成功
+     */
+    private final AtomicBoolean connected = new AtomicBoolean(false);
+
+    /**
+     * 是否已关闭,true 表示用户主动关闭连接,不再重连
+     */
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    /**
+     * 关闭完成信号,用于 onClose() 方法
+     */
+    private final Sinks.Empty<Void> closeSink = Sinks.empty();
+
+    /**
+     * CONNACK 消息接收器,每次重连时重置,使用 volatile 保证可见性
+     */
+    private volatile Sinks.One<MqttConnAckMessage> connAckSink = Sinks.one();
+
+    // ==================== 消息 ID 管理 ====================
+
+    /**
+     * MQTT 消息 ID 生成器,范围 1-65535,循环使用
+     */
     private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
 
-    // Pending 消息（等待确认）
+    // ==================== Pending 消息(等待服务器确认) ====================
+
+    /**
+     * 等待 PUBACK 的消息(QoS 1),key 为消息 ID
+     */
     private final Map<Integer, Sinks.Empty<Void>> pendingPubAck = new ConcurrentHashMap<>();
+
+    /**
+     * 等待 PUBREC 的消息(QoS 2),key 为消息 ID
+     */
     private final Map<Integer, Sinks.Empty<Void>> pendingPubRec = new ConcurrentHashMap<>();
+
+    /**
+     * 等待 PUBCOMP 的消息(QoS 2),key 为消息 ID
+     */
     private final Map<Integer, Sinks.Empty<Void>> pendingPubComp = new ConcurrentHashMap<>();
+
+    /**
+     * 等待 SUBACK 的订阅请求,key 为消息 ID
+     */
     private final Map<Integer, Sinks.Empty<Void>> pendingSubAck = new ConcurrentHashMap<>();
+
+    /**
+     * 等待 UNSUBACK 的取消订阅请求,key 为消息 ID
+     */
     private final Map<Integer, Sinks.Empty<Void>> pendingUnsubAck = new ConcurrentHashMap<>();
 
-    // 订阅管理
+    // ==================== 订阅管理 ====================
+
+    /**
+     * 订阅处理器映射,key 为主题,value 为处理器
+     */
     private final Map<String, SubscriptionHandler> subscriptionHandlers = new ConcurrentHashMap<>();
+
+    /**
+     * 活跃订阅列表,用于重连后自动重新订阅
+     */
     private final List<SubscriptionInfo> activeSubscriptions = new CopyOnWriteArrayList<>();
 
-    // 消息流
+    // ==================== 消息流 ====================
+
+    /**
+     * 接收到的消息流,支持多个订阅者
+     */
     private final Sinks.Many<MqttClientPublishing> messageSink = Sinks.many().multicast().onBackpressureBuffer();
 
     public DefaultMqttClientConnection(Connection connection,
@@ -113,7 +240,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                                        boolean willRetain,
                                        Function<MqttClientPublishing, Mono<Void>> publishingHandler,
                                        boolean autoAck,
-                                       MqttQoS defaultQos,
+                                       MqttQoS qos,
                                        ReconnectStrategy reconnectStrategy,
                                        boolean autoResubscribe,
                                        Supplier<TcpClient> tcpClientSupplier) {
@@ -131,7 +258,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
         this.willRetain = willRetain;
         this.publishingHandler = publishingHandler;
         this.autoAck = autoAck;
-        this.defaultQos = defaultQos;
+        this.qos = qos;
         this.reconnectStrategy = reconnectStrategy;
         this.autoResubscribe = autoResubscribe;
         this.tcpClientSupplier = tcpClientSupplier;
@@ -248,7 +375,10 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     private Mono<Void> handleConnAck(MqttConnAckMessage msg) {
-        connAckSink.tryEmitValue(msg);
+        Sinks.EmitResult result = connAckSink.tryEmitValue(msg);
+        if (result.isFailure()) {
+            log.log(Level.WARNING, "Failed to emit CONNACK: " + result + ", this should not happen after reconnect fix");
+        }
         return Mono.empty();
     }
 
@@ -384,11 +514,15 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         int attempt = reconnectAttempt.incrementAndGet();
 
+        connAckSink = Sinks.one();
+
         reconnectStrategy.nextDelay(attempt, null)
                          .flatMap(delay -> Mono.delay(delay)
                                                .then(tcpClientSupplier.get().connect())
                                                .flatMap(conn -> {
                                                    this.connection = conn;
+                                                   ensureMqttCodec();
+                                                   setupConnectionHandlers();
                                                    return sendConnect();
                                                })
                                                .then(resubscribeIfNeeded())
@@ -622,7 +756,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     @Override
     public MqttQoS getQos() {
-        return defaultQos;
+        return qos;
     }
 
     private Mono<Void> send(MqttMessage message) {

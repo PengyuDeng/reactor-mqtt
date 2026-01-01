@@ -31,6 +31,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -78,6 +79,8 @@ public class DefaultMqttConnection implements MqttConnection {
 
     private volatile MqttMessageListener messageListener;
     private volatile boolean autoAck = true;
+
+    private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
 
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
@@ -365,7 +368,48 @@ public class DefaultMqttConnection implements MqttConnection {
 
     @Override
     public Mono<Void> publish(MqttPublishMessage message) {
-        return send(message);
+        return Mono.defer(() -> {
+            MqttFixedHeader fixedHeader = message.fixedHeader();
+            MqttQoS qos = fixedHeader.qosLevel();
+
+            if (qos == MqttQoS.AT_MOST_ONCE) {
+                return send(message);
+            }
+
+            int currentMessageId = message.variableHeader().packetId();
+
+            if (currentMessageId > 0 && currentMessageId <= 65535) {
+                return send(message);
+            }
+
+            int newMessageId = nextMessageId();
+
+            MqttPublishMessage newMessage = MqttMessageBuilders.publish()
+                                                               .topicName(message.variableHeader().topicName())
+                                                               .payload(message.payload().retain())
+                                                               .qos(qos)
+                                                               .retained(fixedHeader.isRetain())
+                                                               .messageId(newMessageId)
+                                                               .build();
+
+            return send(newMessage);
+        });
+    }
+
+    /**
+     * 生成下一个 MQTT 消息 ID,范围 1-65535
+     *
+     * @return 消息 ID (1-65535)
+     */
+    private int nextMessageId() {
+        int id;
+        do {
+            // incrementAndGet 是 JVM 高度优化的原子操作
+            // & 0xFFFF 将结果限制在 0-65535 范围内
+            id = messageIdGenerator.incrementAndGet() & 0xFFFF;
+            // 跳过 0 (MQTT 协议要求)
+        } while (id == 0);
+        return id;
     }
 
     @Override

@@ -178,6 +178,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     /**
      * MQTT 消息 ID 生成器,范围 1-65535,循环使用
+     * 初始化为 0,第一次调用 incrementAndGet() 会得到 1
      */
     private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
 
@@ -765,6 +766,11 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                          .then();
     }
 
+    /**
+     * 生成下一个 MQTT 消息 ID,范围 1-65535
+     *
+     * @return 消息 ID (1-65535)
+     */
     private int nextMessageId() {
         int id;
         do {

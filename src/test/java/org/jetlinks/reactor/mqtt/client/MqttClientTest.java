@@ -23,6 +23,7 @@ import org.jetlinks.reactor.mqtt.server.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.test.StepVerifier;
@@ -473,6 +474,9 @@ class MqttClientTest {
                                                     .connect())
                                     .flatMap(conn -> {
                                         clientConnection = conn;
+
+                                        Flux<ClientReceivedPublish> receive = conn.receive();
+
 
                                         // 订阅精确主题 - 不同 QoS
                                         Disposable sub1 = conn.subscribe("/home/temperature", MqttQoS.AT_MOST_ONCE, msg -> {

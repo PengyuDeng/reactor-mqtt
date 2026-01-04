@@ -118,7 +118,7 @@ public class MqttClientSendTest {
                 .port(SERVER_PORT)
                 .clientId(clientId)
                 .cleanSession(true)
-                .keepAlive(300)
+                .keepAlive((short) 300)
                 .qos(QOS)
                 .connect()
                 .doOnNext(conn -> {

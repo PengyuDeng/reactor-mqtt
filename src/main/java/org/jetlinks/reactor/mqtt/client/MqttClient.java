@@ -29,9 +29,9 @@ import reactor.netty.resources.LoopResources;
 import reactor.netty.tcp.TcpClient;
 
 import java.time.Duration;
-import java.util.function.Supplier;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * 基于 Reactor Netty 的 MQTT 客户端 - 纯响应式、高性能
@@ -74,80 +74,124 @@ public class MqttClient {
 
     // ==================== 连接配置 ====================
 
-    /** MQTT 服务器主机地址,默认 127.0.0.1 */
+    /**
+     * MQTT 服务器主机地址,默认 127.0.0.1
+     */
     private String host = "127.0.0.1";
 
-    /** MQTT 服务器端口,默认 1883 */
+    /**
+     * MQTT 服务器端口,默认 1883
+     */
     private int port = 1883;
 
-    /** MQTT 客户端 ID,为 null 时自动生成 */
+    /**
+     * MQTT 客户端 ID,为 null 时自动生成
+     */
     private String clientId;
 
-    /** MQTT 连接用户名,可选 */
+    /**
+     * MQTT 连接用户名,可选
+     */
     private String username;
 
-    /** MQTT 连接密码,可选 */
+    /**
+     * MQTT 连接密码,可选
+     */
     private byte[] password;
 
-    /** MQTT Keep Alive 时间(秒),默认 60 秒 */
-    private int keepAliveSeconds = 60;
+    /**
+     * MQTT Keep Alive 时间(秒),默认 60 秒
+     */
+    private short keepAliveSeconds = 60;
 
-    /** 是否使用 Clean Session,默认 true */
+    /**
+     * 是否使用 Clean Session,默认 true
+     */
     private boolean cleanSession = true;
 
-    /** MQTT 协议版本,默认 MQTT 3.1.1 */
-    private int protocolVersion = MqttVersion.MQTT_3_1_1.protocolLevel();
+    /**
+     * MQTT 协议版本,默认 MQTT 3.1.1
+     */
+    private byte protocolVersion = MqttVersion.MQTT_3_1_1.protocolLevel();
 
-    /** MQTT 消息最大大小(字节),默认 8096 */
+    /**
+     * MQTT 消息最大大小(字节),默认 8096
+     */
     private int maxMessageSize = 8096;
 
     // ==================== 遗言配置 ====================
 
-    /** 遗言消息的主题 */
+    /**
+     * 遗言消息的主题
+     */
     private String willTopic;
 
-    /** 遗言消息的负载内容 */
+    /**
+     * 遗言消息的负载内容
+     */
     private ByteBuf willPayload;
 
-    /** 遗言消息的 QoS 级别,默认 QoS 0 */
+    /**
+     * 遗言消息的 QoS 级别,默认 QoS 0
+     */
     private MqttQoS willQos = MqttQoS.AT_MOST_ONCE;
 
-    /** 遗言消息是否保留,默认 false */
+    /**
+     * 遗言消息是否保留,默认 false
+     */
     private boolean willRetain = false;
 
     // ==================== SSL 配置 ====================
 
-    /** SSL 上下文,用于加密连接,为 null 时使用明文连接 */
+    /**
+     * SSL 上下文,用于加密连接,为 null 时使用明文连接
+     */
     private SslContext sslContext;
 
     // ==================== 重连配置 ====================
 
-    /** 重连策略,默认不重连 */
+    /**
+     * 重连策略,默认不重连
+     */
     private ReconnectStrategy reconnectStrategy = ReconnectStrategy.none();
 
-    /** 重连后是否自动重新订阅之前的主题,默认 true */
+    /**
+     * 重连后是否自动重新订阅之前的主题,默认 true
+     */
     private boolean autoResubscribe = true;
 
     // ==================== 消息处理配置 ====================
 
-    /** 全局消息发布处理器,接收所有订阅的消息 */
+    /**
+     * 全局消息发布处理器,接收所有订阅的消息
+     */
     private Function<MqttClientPublishing, Mono<Void>> publishingHandler;
 
-    /** 是否自动确认 QoS 1/2 消息,默认 true */
+    /**
+     * 是否自动确认 QoS 1/2 消息,默认 true
+     */
     private boolean autoAck = true;
 
-    /** 默认 QoS 级别,用于 publish 和 subscribe 方法未指定 QoS 时,默认 QoS 0 */
+    /**
+     * 默认 QoS 级别,用于 publish 和 subscribe 方法未指定 QoS 时,默认 QoS 0
+     */
     private MqttQoS qos = MqttQoS.AT_MOST_ONCE;
 
     // ==================== 网络配置 ====================
 
-    /** Netty EventLoop 资源,为 null 时使用默认 */
+    /**
+     * Netty EventLoop 资源,为 null 时使用默认
+     */
     private LoopResources loopResources;
 
-    /** 是否启用 TCP_NODELAY(禁用 Nagle 算法),默认 true */
+    /**
+     * 是否启用 TCP_NODELAY(禁用 Nagle 算法),默认 true
+     */
     private boolean tcpNoDelay = true;
 
-    /** TCP 连接超时时间,默认 10 秒 */
+    /**
+     * TCP 连接超时时间,默认 10 秒
+     */
     private Duration connectTimeout = Duration.ofSeconds(10);
 
     private MqttClient() {
@@ -190,7 +234,7 @@ public class MqttClient {
         return this;
     }
 
-    public MqttClient keepAlive(int seconds) {
+    public MqttClient keepAlive(short seconds) {
         if (seconds < 0) {
             throw new IllegalArgumentException("keepAlive must not be negative");
         }
@@ -332,14 +376,14 @@ public class MqttClient {
         Sinks.One<MqttClientConnection> connectionSink = Sinks.one();
 
         TcpClient tcpClient = TcpClient.create()
-                .host(host)
-                .port(port)
-                .option(ChannelOption.TCP_NODELAY, tcpNoDelay)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
-                .doOnConnected(conn -> {
-                    conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
-                    conn.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
-                });
+                                       .host(host)
+                                       .port(port)
+                                       .option(ChannelOption.TCP_NODELAY, tcpNoDelay)
+                                       .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
+                                       .doOnConnected(conn -> {
+                                           conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
+                                           conn.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
+                                       });
 
         if (loopResources != null) {
             tcpClient = tcpClient.runOn(loopResources);
@@ -352,28 +396,28 @@ public class MqttClient {
         final Supplier<TcpClient> tcpClientSupplier = this::createTcpClient;
 
         return tcpClient.connect()
-                .flatMap(conn -> {
-                    DefaultMqttClientConnection mqttConn = new DefaultMqttClientConnection(
-                            conn,
-                            actualClientId,
-                            username,
-                            password,
-                            keepAliveSeconds,
-                            cleanSession,
-                            protocolVersion,
-                            willTopic,
-                            willPayload,
-                            willQos,
-                            willRetain,
-                            publishingHandler,
-                            autoAck,
-                            qos,
-                            reconnectStrategy,
-                            autoResubscribe,
-                            tcpClientSupplier
-                    );
-                    return mqttConn.initialize();
-                });
+                        .flatMap(conn -> {
+                            DefaultMqttClientConnection mqttConn = new DefaultMqttClientConnection(
+                                    conn,
+                                    actualClientId,
+                                    username,
+                                    password,
+                                    keepAliveSeconds,
+                                    cleanSession,
+                                    protocolVersion,
+                                    willTopic,
+                                    willPayload,
+                                    willQos,
+                                    willRetain,
+                                    publishingHandler,
+                                    autoAck,
+                                    qos,
+                                    reconnectStrategy,
+                                    autoResubscribe,
+                                    tcpClientSupplier
+                            );
+                            return mqttConn.initialize();
+                        });
     }
 
     /**
@@ -403,14 +447,14 @@ public class MqttClient {
 
     private TcpClient createTcpClient() {
         TcpClient client = TcpClient.create()
-                .host(host)
-                .port(port)
-                .option(ChannelOption.TCP_NODELAY, tcpNoDelay)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
-                .doOnConnected(conn -> {
-                    conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
-                    conn.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
-                });
+                                    .host(host)
+                                    .port(port)
+                                    .option(ChannelOption.TCP_NODELAY, tcpNoDelay)
+                                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
+                                    .doOnConnected(conn -> {
+                                        conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
+                                        conn.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
+                                    });
 
         if (loopResources != null) {
             client = client.runOn(loopResources);

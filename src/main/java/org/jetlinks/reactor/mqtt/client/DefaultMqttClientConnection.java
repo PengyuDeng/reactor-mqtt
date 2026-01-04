@@ -29,11 +29,8 @@ import reactor.netty.tcp.TcpClient;
 
 import java.time.Duration;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -49,93 +46,10 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private static final Logger log = Logger.getLogger(DefaultMqttClientConnection.class.getName());
 
-    // ==================== 连接配置 ====================
-
     /**
-     * Netty TCP 连接,使用 volatile 保证重连时的可见性
+     * 连接配置,包含所有 MQTT 连接参数
      */
-    private volatile Connection connection;
-
-    /**
-     * MQTT 客户端 ID,用于标识客户端
-     */
-    private final String clientId;
-
-    /**
-     * MQTT 连接用户名,可选
-     */
-    private final String username;
-
-    /**
-     * MQTT 连接密码,可选
-     */
-    private final byte[] password;
-
-    /**
-     * MQTT Keep Alive 时间(秒),用于心跳检测
-     */
-    private final int keepAliveSeconds;
-
-    /**
-     * 是否使用 Clean Session,true 时服务器不保留会话状态
-     */
-    private final boolean cleanSession;
-
-    /**
-     * MQTT 协议版本(3 或 5)
-     */
-    private final int protocolVersion;
-
-    // ==================== 遗言配置 ====================
-
-    /**
-     * 遗言消息的主题,客户端异常断开时发送
-     */
-    private final String willTopic;
-
-    /**
-     * 遗言消息的负载内容
-     */
-    private final ByteBuf willPayload;
-
-    /**
-     * 遗言消息的 QoS 级别
-     */
-    private final MqttQoS willQos;
-
-    /**
-     * 遗言消息是否保留
-     */
-    private final boolean willRetain;
-
-    // ==================== 消息处理配置 ====================
-
-    /**
-     * 全局消息发布处理器,接收所有订阅的消息
-     */
-    private final Function<MqttClientPublishing, Mono<Void>> publishingHandler;
-
-    /**
-     * 是否自动确认(Acknowledge)消息,QoS > 0 时有效
-     */
-    private final boolean autoAck;
-
-    /**
-     * 默认发布消息的 QoS 级别
-     */
-    private final MqttQoS qos;
-
-    // ==================== 重连配置 ====================
-
-    /**
-     * 重连策略,决定重连延迟时间
-     */
-    private final ReconnectStrategy reconnectStrategy;
-
-    /**
-     * 重连后是否自动重新订阅之前的主题
-     */
-    private final boolean autoResubscribe;
+    private final ConnectionConfig config;
 
     /**
      * TCP 客户端提供者,用于创建新连接
@@ -143,26 +57,30 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     private final Supplier<TcpClient> tcpClientSupplier;
 
     /**
-     * 当前重连尝试次数,成功连接后重置为 0
+     * Netty TCP 连接,使用 volatile 保证重连时的可见性
      */
-    private final AtomicInteger reconnectAttempt = new AtomicInteger(0);
+    private volatile Connection connection;
 
     /**
-     * 是否正在重连中,防止并发重连
+     * 状态字段: bit0-2=状态标志, bit3-31=重连次数
+     * 标志位: bit0=connected, bit1=closed, bit2=reconnecting
+     * AtomicInteger state 布局:</br>
+     * ┌─────────────────────────────────┬────┬────┬────┐
+     * │  重连次数 (29 bits)              │ R  │ C  │ N  │
+     * │  bit 3-31                       │bit2│bit1│bit0│
+     * └─────────────────────────────────┴────┴────┴────┘
+     * N = CONNECTED (1)
+     * C = CLOSED (2)
+     * R = RECONNECTING (4)
      */
-    private final AtomicBoolean reconnecting = new AtomicBoolean(false);
+    private final AtomicInteger state = new AtomicInteger(0);
 
-    // ==================== 连接状态 ====================
-
-    /**
-     * 是否已连接,true 表示 CONNACK 已接收且连接成功
-     */
-    private final AtomicBoolean connected = new AtomicBoolean(false);
-
-    /**
-     * 是否已关闭,true 表示用户主动关闭连接,不再重连
-     */
-    private final AtomicBoolean closed = new AtomicBoolean(false);
+    // 状态标志位 (bit 0-2)
+    private static final int CONNECTED = 1;
+    private static final int CLOSED = 2;
+    private static final int RECONNECTING = 4;
+    private static final int FLAGS_MASK = 0x7;          // 低3位
+    private static final int ATTEMPT_INCREMENT = 0x8;   // 重连次数从 bit3 开始
 
     /**
      * 关闭完成信号,用于 onClose() 方法
@@ -174,54 +92,20 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
      */
     private volatile Sinks.One<MqttConnAckMessage> connAckSink = Sinks.one();
 
-    // ==================== 消息 ID 管理 ====================
-
     /**
      * MQTT 消息 ID 生成器,范围 1-65535,循环使用
-     * 初始化为 0,第一次调用 incrementAndGet() 会得到 1
      */
     private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
 
-    // ==================== Pending 消息(等待服务器确认) ====================
-
     /**
-     * 等待 PUBACK 的消息(QoS 1),key 为消息 ID
+     * 统一的 pending 消息映射: key = (MqttMessageType.ordinal << 16) | messageId
      */
-    private final Map<Integer, Sinks.Empty<Void>> pendingPubAck = new ConcurrentHashMap<>();
+    private final Map<Integer, Sinks.Empty<Void>> pendingAcks = new ConcurrentHashMap<>();
 
     /**
-     * 等待 PUBREC 的消息(QoS 2),key 为消息 ID
-     */
-    private final Map<Integer, Sinks.Empty<Void>> pendingPubRec = new ConcurrentHashMap<>();
-
-    /**
-     * 等待 PUBCOMP 的消息(QoS 2),key 为消息 ID
-     */
-    private final Map<Integer, Sinks.Empty<Void>> pendingPubComp = new ConcurrentHashMap<>();
-
-    /**
-     * 等待 SUBACK 的订阅请求,key 为消息 ID
-     */
-    private final Map<Integer, Sinks.Empty<Void>> pendingSubAck = new ConcurrentHashMap<>();
-
-    /**
-     * 等待 UNSUBACK 的取消订阅请求,key 为消息 ID
-     */
-    private final Map<Integer, Sinks.Empty<Void>> pendingUnsubAck = new ConcurrentHashMap<>();
-
-    // ==================== 订阅管理 ====================
-
-    /**
-     * 订阅处理器映射,key 为主题,value 为处理器
+     * 订阅处理器映射,key 为主题,value 为处理器(同时用于重连后自动重新订阅)
      */
     private final Map<String, SubscriptionHandler> subscriptionHandlers = new ConcurrentHashMap<>();
-
-    /**
-     * 活跃订阅列表,用于重连后自动重新订阅
-     */
-    private final List<SubscriptionInfo> activeSubscriptions = new CopyOnWriteArrayList<>();
-
-    // ==================== 消息流 ====================
 
     /**
      * 接收到的消息流,支持多个订阅者
@@ -232,9 +116,9 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                                        String clientId,
                                        String username,
                                        byte[] password,
-                                       int keepAliveSeconds,
+                                       short keepAliveSeconds,
                                        boolean cleanSession,
-                                       int protocolVersion,
+                                       byte protocolVersion,
                                        String willTopic,
                                        ByteBuf willPayload,
                                        MqttQoS willQos,
@@ -247,29 +131,20 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                                        Supplier<TcpClient> tcpClientSupplier) {
 
         this.connection = connection;
-        this.clientId = clientId;
-        this.username = username;
-        this.password = password;
-        this.keepAliveSeconds = keepAliveSeconds;
-        this.cleanSession = cleanSession;
-        this.protocolVersion = protocolVersion;
-        this.willTopic = willTopic;
-        this.willPayload = willPayload;
-        this.willQos = willQos;
-        this.willRetain = willRetain;
-        this.publishingHandler = publishingHandler;
-        this.autoAck = autoAck;
-        this.qos = qos;
-        this.reconnectStrategy = reconnectStrategy;
-        this.autoResubscribe = autoResubscribe;
+        this.config = new ConnectionConfig(clientId, username, password, keepAliveSeconds, cleanSession, protocolVersion,
+                                           willTopic, willPayload, willQos, willRetain, publishingHandler, autoAck, qos,
+                                           reconnectStrategy, autoResubscribe);
         this.tcpClientSupplier = tcpClientSupplier;
+    }
+
+    private static int pendingKey(MqttMessageType type, int messageId) {
+        return (type.value() << 16) | messageId;
     }
 
     /**
      * 初始化连接（发送 CONNECT，等待 CONNACK）
      */
     Mono<MqttClientConnection> initialize() {
-        // 确保 MQTT codec 已添加到 pipeline
         ensureMqttCodec();
         setupConnectionHandlers();
         return sendConnect()
@@ -302,7 +177,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                   );
 
         connection.onDispose(() -> {
-            if (!closed.get()) {
+            if (!hasFlag(CLOSED)) {
                 handleDisconnect();
             }
         });
@@ -310,31 +185,31 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private Mono<Void> sendConnect() {
         MqttMessageBuilders.ConnectBuilder builder = MqttMessageBuilders.connect()
-                                                                        .clientId(clientId)
-                                                                        .keepAlive(keepAliveSeconds)
-                                                                        .cleanSession(cleanSession);
+                                                                        .clientId(config.clientId)
+                                                                        .keepAlive(config.keepAliveSeconds)
+                                                                        .cleanSession(config.cleanSession());
 
-        if (protocolVersion == 5) {
+        if (config.protocolVersion == 5) {
             builder.protocolVersion(MqttVersion.MQTT_5);
         }
 
-        if (username != null) {
-            builder.username(username);
-            if (password != null) {
-                builder.password(password);
+        if (config.username != null) {
+            builder.username(config.username);
+            if (config.password != null) {
+                builder.password(config.password);
             }
         }
 
-        if (willTopic != null) {
+        if (config.willTopic != null) {
             byte[] willPayloadBytes = null;
-            if (willPayload != null && willPayload.readableBytes() > 0) {
-                willPayloadBytes = new byte[willPayload.readableBytes()];
-                willPayload.getBytes(willPayload.readerIndex(), willPayloadBytes);
+            if (config.willPayload != null && config.willPayload.readableBytes() > 0) {
+                willPayloadBytes = new byte[config.willPayload.readableBytes()];
+                config.willPayload.getBytes(config.willPayload.readerIndex(), willPayloadBytes);
             }
-            builder.willTopic(willTopic)
+            builder.willTopic(config.willTopic)
                    .willMessage(willPayloadBytes)
-                   .willQoS(willQos)
-                   .willRetain(willRetain);
+                   .willQoS(config.willQos)
+                   .willRetain(config.willRetain());
         }
 
         MqttConnectMessage connectMessage = builder.build();
@@ -346,8 +221,8 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                                      if (connAck
                                              .variableHeader()
                                              .connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
-                                         connected.set(true);
-                                         reconnectAttempt.set(0);
+                                         setConnectedFlag();
+                                         resetReconnectAttempt();
                                          return Mono.empty();
                                      } else {
                                          return Mono.error(new MqttConnectionException(
@@ -401,17 +276,20 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         for (Map.Entry<String, SubscriptionHandler> entry : subscriptionHandlers.entrySet()) {
             if (topicMatches(entry.getKey(), topic)) {
-                handlerMono = handlerMono.then(entry.getValue().handler.apply(publishing));
+                SubscriptionHandler handler = entry.getValue();
+                if (handler.handler != null) {
+                    handlerMono = handlerMono.then(handler.handler.apply(publishing));
+                }
             }
         }
 
         // 全局处理器
-        if (publishingHandler != null) {
-            handlerMono = handlerMono.then(publishingHandler.apply(publishing));
+        if (config.publishingHandler != null) {
+            handlerMono = handlerMono.then(config.publishingHandler.apply(publishing));
         }
 
         // 自动确认
-        if (autoAck && msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
+        if (config.autoAck() && msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
             handlerMono = handlerMono.then(publishing.acknowledge());
         }
 
@@ -420,7 +298,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private Mono<Void> handlePubAck(MqttPubAckMessage msg) {
         int messageId = msg.variableHeader().messageId();
-        Sinks.Empty<Void> sink = pendingPubAck.remove(messageId);
+        Sinks.Empty<Void> sink = pendingAcks.remove(pendingKey(MqttMessageType.PUBACK, messageId));
         if (sink != null) {
             sink.tryEmitEmpty();
         }
@@ -429,19 +307,18 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private Mono<Void> handlePubRec(MqttMessage msg) {
         int messageId = ((MqttMessageIdVariableHeader) msg.variableHeader()).messageId();
-        Sinks.Empty<Void> sink = pendingPubRec.remove(messageId);
+        Sinks.Empty<Void> sink = pendingAcks.remove(pendingKey(MqttMessageType.PUBREC, messageId));
         if (sink != null) {
             sink.tryEmitEmpty();
         }
 
-        // 发送 PUBREL
         MqttMessage pubRel = new MqttMessage(
                 new MqttFixedHeader(MqttMessageType.PUBREL, false, MqttQoS.AT_LEAST_ONCE, false, 0),
                 MqttMessageIdVariableHeader.from(messageId)
         );
 
         Sinks.Empty<Void> compSink = Sinks.empty();
-        pendingPubComp.put(messageId, compSink);
+        pendingAcks.put(pendingKey(MqttMessageType.PUBCOMP, messageId), compSink);
 
         return send(pubRel);
     }
@@ -449,7 +326,6 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     private Mono<Void> handlePubRel(MqttMessage msg) {
         int messageId = ((MqttMessageIdVariableHeader) msg.variableHeader()).messageId();
 
-        // 发送 PUBCOMP
         MqttMessage pubComp = new MqttMessage(
                 new MqttFixedHeader(MqttMessageType.PUBCOMP, false, MqttQoS.AT_MOST_ONCE, false, 0),
                 MqttMessageIdVariableHeader.from(messageId)
@@ -460,7 +336,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private Mono<Void> handlePubComp(MqttMessage msg) {
         int messageId = ((MqttMessageIdVariableHeader) msg.variableHeader()).messageId();
-        Sinks.Empty<Void> sink = pendingPubComp.remove(messageId);
+        Sinks.Empty<Void> sink = pendingAcks.remove(pendingKey(MqttMessageType.PUBCOMP, messageId));
         if (sink != null) {
             sink.tryEmitEmpty();
         }
@@ -469,7 +345,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private Mono<Void> handleSubAck(MqttSubAckMessage msg) {
         int messageId = msg.variableHeader().messageId();
-        Sinks.Empty<Void> sink = pendingSubAck.remove(messageId);
+        Sinks.Empty<Void> sink = pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId));
         if (sink != null) {
             sink.tryEmitEmpty();
         }
@@ -478,7 +354,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     private Mono<Void> handleUnsubAck(MqttMessage msg) {
         int messageId = ((MqttMessageIdVariableHeader) msg.variableHeader()).messageId();
-        Sinks.Empty<Void> sink = pendingUnsubAck.remove(messageId);
+        Sinks.Empty<Void> sink = pendingAcks.remove(pendingKey(MqttMessageType.UNSUBACK, messageId));
         if (sink != null) {
             sink.tryEmitEmpty();
         }
@@ -495,11 +371,11 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     private void handleDisconnect() {
-        if (!connected.compareAndSet(true, false)) {
+        if (!clearFlag(CONNECTED)) {
             return;
         }
 
-        if (closed.get()) {
+        if (hasFlag(CLOSED)) {
             closeSink.tryEmitEmpty();
             return;
         }
@@ -509,44 +385,44 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     private void attemptReconnect() {
-        if (!reconnecting.compareAndSet(false, true)) {
+        if (flagAlreadySet(RECONNECTING)) {
             return;
         }
 
-        int attempt = reconnectAttempt.incrementAndGet();
+        int attempt = incrementReconnectAttempt();
 
         connAckSink = Sinks.one();
 
-        reconnectStrategy.nextDelay(attempt, null)
-                         .flatMap(delay -> Mono.delay(delay)
-                                               .then(tcpClientSupplier.get().connect())
-                                               .flatMap(conn -> {
-                                                   this.connection = conn;
-                                                   ensureMqttCodec();
-                                                   setupConnectionHandlers();
-                                                   return sendConnect();
-                                               })
-                                               .then(resubscribeIfNeeded())
-                         )
-                         .subscribe(
-                                 v -> {
-                                     reconnecting.set(false);
-                                     log.info("Reconnected successfully");
-                                 },
-                                 error -> {
-                                     reconnecting.set(false);
-                                     log.log(Level.WARNING, "Reconnect failed: " + error.getMessage());
-                                     attemptReconnect();
-                                 }
-                         );
+        config.reconnectStrategy.nextDelay(attempt, null)
+                                .flatMap(delay -> Mono.delay(delay)
+                                                      .then(tcpClientSupplier.get().connect())
+                                                      .flatMap(conn -> {
+                                                          this.connection = conn;
+                                                          ensureMqttCodec();
+                                                          setupConnectionHandlers();
+                                                          return sendConnect();
+                                                      })
+                                                      .then(resubscribeIfNeeded())
+                                )
+                                .subscribe(
+                                        v -> {
+                                            clearFlag(RECONNECTING);
+                                            log.info("Reconnected successfully");
+                                        },
+                                        error -> {
+                                            clearFlag(RECONNECTING);
+                                            log.log(Level.WARNING, "Reconnect failed: " + error.getMessage());
+                                            attemptReconnect();
+                                        }
+                                );
     }
 
     private Mono<Void> resubscribeIfNeeded() {
-        if (!autoResubscribe || activeSubscriptions.isEmpty()) {
+        if (!config.autoResubscribe() || subscriptionHandlers.isEmpty()) {
             return Mono.empty();
         }
 
-        return Flux.fromIterable(activeSubscriptions)
+        return Flux.fromIterable(subscriptionHandlers.values())
                    .flatMap(sub -> doSubscribe(sub.topic, sub.qos))
                    .then();
     }
@@ -554,7 +430,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     @Override
     public Mono<Void> publish(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
         return Mono.defer(() -> {
-            if (!connected.get()) {
+            if (!hasFlag(CONNECTED)) {
                 return Mono.error(new IllegalStateException("Not connected"));
             }
 
@@ -572,25 +448,25 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                 return send(publishMessage);
             } else if (qos == MqttQoS.AT_LEAST_ONCE) {
                 Sinks.Empty<Void> sink = Sinks.empty();
-                pendingPubAck.put(messageId, sink);
+                pendingAcks.put(pendingKey(MqttMessageType.PUBACK, messageId), sink);
                 return send(publishMessage)
                         .then(sink.asMono())
                         .timeout(Duration.ofSeconds(30))
-                        .doOnError(e -> pendingPubAck.remove(messageId));
+                        .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.PUBACK, messageId)));
             } else {
                 // QoS 2
                 Sinks.Empty<Void> recSink = Sinks.empty();
-                pendingPubRec.put(messageId, recSink);
+                pendingAcks.put(pendingKey(MqttMessageType.PUBREC, messageId), recSink);
                 return send(publishMessage)
                         .then(recSink.asMono())
                         .then(Mono.defer(() -> {
-                            Sinks.Empty<Void> compSink = pendingPubComp.get(messageId);
+                            Sinks.Empty<Void> compSink = pendingAcks.get(pendingKey(MqttMessageType.PUBCOMP, messageId));
                             return compSink != null ? compSink.asMono() : Mono.empty();
                         }))
                         .timeout(Duration.ofSeconds(30))
                         .doOnError(e -> {
-                            pendingPubRec.remove(messageId);
-                            pendingPubComp.remove(messageId);
+                            pendingAcks.remove(pendingKey(MqttMessageType.PUBREC, messageId));
+                            pendingAcks.remove(pendingKey(MqttMessageType.PUBCOMP, messageId));
                         });
             }
         });
@@ -600,14 +476,12 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     public Disposable subscribe(String topic, MqttQoS qos, Function<MqttClientPublishing, Mono<Void>> handler) {
         SubscriptionHandler subHandler = new SubscriptionHandler(topic, qos, handler);
         subscriptionHandlers.put(topic, subHandler);
-        activeSubscriptions.add(new SubscriptionInfo(topic, qos));
 
         Disposable.Composite composite = Disposables.composite();
 
         composite.add(doSubscribe(topic, qos).subscribe());
         composite.add(() -> {
             subscriptionHandlers.remove(topic);
-            activeSubscriptions.removeIf(s -> s.topic.equals(topic));
             unsubscribe(topic).subscribe();
         });
 
@@ -623,12 +497,12 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                                                                    .build();
 
         Sinks.Empty<Void> sink = Sinks.empty();
-        pendingSubAck.put(messageId, sink);
+        pendingAcks.put(pendingKey(MqttMessageType.SUBACK, messageId), sink);
 
         return send(subscribeMessage)
                 .then(sink.asMono())
                 .timeout(Duration.ofSeconds(10))
-                .doOnError(e -> pendingSubAck.remove(messageId));
+                .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId)));
     }
 
     @Override
@@ -644,18 +518,19 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         for (String topic : topics) {
             subscribeBuilder.addSubscription(MqttQoS.AT_MOST_ONCE, topic);
-            activeSubscriptions.add(new SubscriptionInfo(topic, MqttQoS.AT_MOST_ONCE));
+            // 记录订阅但不带处理器(仅用于重连)
+            subscriptionHandlers.putIfAbsent(topic, new SubscriptionHandler(topic, MqttQoS.AT_MOST_ONCE, null));
         }
 
         MqttSubscribeMessage subscribeMessage = subscribeBuilder.build();
 
         Sinks.Empty<Void> sink = Sinks.empty();
-        pendingSubAck.put(messageId, sink);
+        pendingAcks.put(pendingKey(MqttMessageType.SUBACK, messageId), sink);
 
         return send(subscribeMessage)
                 .then(sink.asMono())
                 .timeout(Duration.ofSeconds(10))
-                .doOnError(e -> pendingSubAck.remove(messageId));
+                .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId)));
     }
 
     @Override
@@ -680,18 +555,17 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
         for (String topic : topics) {
             unsubscribeBuilder.addTopicFilter(topic);
             subscriptionHandlers.remove(topic);
-            activeSubscriptions.removeIf(s -> s.topic.equals(topic));
         }
 
         MqttUnsubscribeMessage unsubscribeMessage = unsubscribeBuilder.build();
 
         Sinks.Empty<Void> sink = Sinks.empty();
-        pendingUnsubAck.put(messageId, sink);
+        pendingAcks.put(pendingKey(MqttMessageType.UNSUBACK, messageId), sink);
 
         return send(unsubscribeMessage)
                 .then(sink.asMono())
                 .timeout(Duration.ofSeconds(10))
-                .doOnError(e -> pendingUnsubAck.remove(messageId));
+                .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.UNSUBACK, messageId)));
     }
 
     @Override
@@ -709,7 +583,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     @Override
     public boolean isConnected() {
-        return connected.get() && connection != null && connection.channel().isActive();
+        return hasFlag(CONNECTED) && connection != null && connection.channel().isActive();
     }
 
     @Override
@@ -720,10 +594,10 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     @Override
     public Mono<Void> close() {
         return Mono.defer(() -> {
-            if (!closed.compareAndSet(false, true)) {
+            if (flagAlreadySet(CLOSED)) {
                 return Mono.empty();
             }
-            connected.set(false);
+            clearFlag(CONNECTED);
             messageSink.tryEmitComplete();
 
             if (connection != null) {
@@ -737,7 +611,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     @Override
     public Mono<Void> disconnect() {
         return Mono.defer(() -> {
-            if (!connected.get()) {
+            if (!hasFlag(CONNECTED)) {
                 return close();
             }
 
@@ -752,12 +626,12 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
     @Override
     public String getClientId() {
-        return clientId;
+        return config.clientId;
     }
 
     @Override
     public MqttQoS getQos() {
-        return qos;
+        return config.qos;
     }
 
     private Mono<Void> send(MqttMessage message) {
@@ -806,6 +680,56 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
         return filterParts.length == topicParts.length;
     }
 
+    private boolean hasFlag(int flag) {
+        return (state.get() & flag) != 0;
+    }
+
+    private void setConnectedFlag() {
+        state.updateAndGet(v -> v | DefaultMqttClientConnection.CONNECTED);
+    }
+
+    /**
+     * 尝试设置标志位，如果已存在则返回true（设置失败）
+     */
+    private boolean flagAlreadySet(int flag) {
+        int prev;
+        do {
+            prev = state.get();
+            if ((prev & flag) != 0) {
+                return true;  // 已存在
+            }
+        } while (!state.compareAndSet(prev, prev | flag));
+        return false;  // 设置成功
+    }
+
+    private boolean clearFlag(int flag) {
+        int prev;
+        do {
+            prev = state.get();
+            if ((prev & flag) == 0) {
+                return false;
+            }
+        } while (!state.compareAndSet(prev, prev & ~flag));
+        return true;
+    }
+
+    /**
+     * 增加重连次数并返回新值
+     */
+    private int incrementReconnectAttempt() {
+        return (state.addAndGet(ATTEMPT_INCREMENT) >>> 3);
+    }
+
+    /**
+     * 重置重连次数为0,保留状态标志
+     */
+    private void resetReconnectAttempt() {
+        state.updateAndGet(v -> v & FLAGS_MASK);
+    }
+
+    /**
+     * 订阅处理器,同时用于重连后自动重新订阅
+     */
     private static class SubscriptionHandler {
         final String topic;
         final MqttQoS qos;
@@ -818,13 +742,66 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
         }
     }
 
-    private static class SubscriptionInfo {
-        final String topic;
-        final MqttQoS qos;
+    /**
+     * 连接配置(不可变)
+     */
+    private static class ConnectionConfig {
+        // 布尔标志位
+        private static final byte FLAG_CLEAN_SESSION = 1;
+        private static final byte FLAG_WILL_RETAIN = 2;
+        private static final byte FLAG_AUTO_ACK = 4;
+        private static final byte FLAG_AUTO_RESUBSCRIBE = 8;
 
-        SubscriptionInfo(String topic, MqttQoS qos) {
-            this.topic = topic;
+        final String clientId;
+        final String username;
+        final byte[] password;
+        final short keepAliveSeconds;          // 原 int, 改为 short (最大 65535 秒足够)
+        final byte protocolVersion;            // 原 int, 只有 3/5 两个值
+        final byte flags;                      // 4 个布尔值打包
+        final String willTopic;
+        final ByteBuf willPayload;
+        final MqttQoS willQos;
+        final MqttQoS qos;
+        final Function<MqttClientPublishing, Mono<Void>> publishingHandler;
+        final ReconnectStrategy reconnectStrategy;
+
+        ConnectionConfig(String clientId, String username, byte[] password,
+                         short keepAliveSeconds, boolean cleanSession, byte protocolVersion,
+                         String willTopic, ByteBuf willPayload, MqttQoS willQos, boolean willRetain,
+                         Function<MqttClientPublishing, Mono<Void>> publishingHandler,
+                         boolean autoAck, MqttQoS qos,
+                         ReconnectStrategy reconnectStrategy, boolean autoResubscribe) {
+            this.clientId = clientId;
+            this.username = username;
+            this.password = password;
+            this.keepAliveSeconds = keepAliveSeconds;
+            this.protocolVersion = protocolVersion;
+            this.flags = (byte) ((cleanSession ? FLAG_CLEAN_SESSION : 0)
+                    | (willRetain ? FLAG_WILL_RETAIN : 0)
+                    | (autoAck ? FLAG_AUTO_ACK : 0)
+                    | (autoResubscribe ? FLAG_AUTO_RESUBSCRIBE : 0));
+            this.willTopic = willTopic;
+            this.willPayload = willPayload;
+            this.willQos = willQos;
             this.qos = qos;
+            this.publishingHandler = publishingHandler;
+            this.reconnectStrategy = reconnectStrategy;
+        }
+
+        boolean cleanSession() {
+            return (flags & FLAG_CLEAN_SESSION) != 0;
+        }
+
+        boolean willRetain() {
+            return (flags & FLAG_WILL_RETAIN) != 0;
+        }
+
+        boolean autoAck() {
+            return (flags & FLAG_AUTO_ACK) != 0;
+        }
+
+        boolean autoResubscribe() {
+            return (flags & FLAG_AUTO_RESUBSCRIBE) != 0;
         }
     }
 

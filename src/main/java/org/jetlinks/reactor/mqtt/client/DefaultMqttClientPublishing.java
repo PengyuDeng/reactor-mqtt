@@ -20,8 +20,8 @@ import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
 import reactor.core.publisher.Mono;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 
 /**
  * MQTT 客户端接收消息实现
@@ -31,13 +31,26 @@ import java.util.function.Function;
 public class DefaultMqttClientPublishing implements MqttClientPublishing {
 
     private final MqttPublishMessage message;
-    private final Function<MqttMessage, Mono<Void>> sender;
-    private final AtomicBoolean acknowledged = new AtomicBoolean(false);
-    private final AtomicBoolean released = new AtomicBoolean(false);
+    private final DefaultMqttClientConnection connection;
+    private volatile boolean acknowledged = false;
+    private volatile boolean released = false;
 
-    public DefaultMqttClientPublishing(MqttPublishMessage message, Function<MqttMessage, Mono<Void>> sender) {
+    private static final VarHandle ACKNOWLEDGED;
+    private static final VarHandle RELEASED;
+
+    static {
+        try {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            ACKNOWLEDGED = lookup.findVarHandle(DefaultMqttClientPublishing.class, "acknowledged", boolean.class);
+            RELEASED = lookup.findVarHandle(DefaultMqttClientPublishing.class, "released", boolean.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    public DefaultMqttClientPublishing(MqttPublishMessage message, DefaultMqttClientConnection connection) {
         this.message = message;
-        this.sender = sender;
+        this.connection = connection;
     }
 
     @Override
@@ -83,7 +96,7 @@ public class DefaultMqttClientPublishing implements MqttClientPublishing {
     @Override
     public Mono<Void> acknowledge() {
         return Mono.defer(() -> {
-            if (!acknowledged.compareAndSet(false, true)) {
+            if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
                 return Mono.empty();
             }
 
@@ -93,12 +106,12 @@ public class DefaultMqttClientPublishing implements MqttClientPublishing {
                 MqttMessage pubAck = MqttMessageBuilders.pubAck()
                         .packetId(message.variableHeader().packetId())
                         .build();
-                return sender.apply(pubAck);
+                return connection.send(pubAck);
             } else if (qos == MqttQoS.EXACTLY_ONCE) {
                 MqttMessage pubRec = new MqttMessage(
                         new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0),
                         MqttMessageIdVariableHeader.from(message.variableHeader().packetId()));
-                return sender.apply(pubRec);
+                return connection.send(pubRec);
             }
 
             return Mono.empty();
@@ -109,7 +122,7 @@ public class DefaultMqttClientPublishing implements MqttClientPublishing {
      * 释放消息资源
      */
     public void release() {
-        if (released.compareAndSet(false, true)) {
+        if (RELEASED.compareAndSet(this, false, true)) {
             ReferenceCountUtil.safeRelease(message);
         }
     }

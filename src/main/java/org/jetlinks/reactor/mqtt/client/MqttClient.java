@@ -106,6 +106,7 @@ public class MqttClient {
 
     /**
      * 是否使用 Clean Session,默认 true
+     * 服务端不保留任何会话状态，连接断开后，所有订阅信息被清除，离线期间的 QoS 1/2 消息不会被保存，每次连接都是全新的会话。
      */
     private boolean cleanSession = true;
 
@@ -122,24 +123,9 @@ public class MqttClient {
     // ==================== 遗言配置 ====================
 
     /**
-     * 遗言消息的主题
+     * 遗言消息
      */
-    private String willTopic;
-
-    /**
-     * 遗言消息的负载内容
-     */
-    private ByteBuf willPayload;
-
-    /**
-     * 遗言消息的 QoS 级别,默认 QoS 0
-     */
-    private MqttQoS willQos = MqttQoS.AT_MOST_ONCE;
-
-    /**
-     * 遗言消息是否保留,默认 false
-     */
-    private boolean willRetain = false;
+    private WillMessage willMessage;
 
     // ==================== SSL 配置 ====================
 
@@ -272,15 +258,17 @@ public class MqttClient {
      * 设置遗言消息
      */
     public MqttClient will(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
-        this.willTopic = topic;
-        this.willPayload = payload;
-        this.willQos = qos;
-        this.willRetain = retain;
+        this.willMessage = new WillMessage(topic, payload, qos, retain);
         return this;
     }
 
     public MqttClient will(String topic, byte[] payload, MqttQoS qos, boolean retain) {
         return will(topic, payload != null ? Unpooled.wrappedBuffer(payload) : null, qos, retain);
+    }
+
+    public MqttClient will(WillMessage willMessage) {
+        this.willMessage = willMessage;
+        return this;
     }
 
     public MqttClient ssl(SslContext sslContext) {
@@ -405,10 +393,7 @@ public class MqttClient {
                                     keepAliveSeconds,
                                     cleanSession,
                                     protocolVersion,
-                                    willTopic,
-                                    willPayload,
-                                    willQos,
-                                    willRetain,
+                                    willMessage,
                                     publishingHandler,
                                     autoAck,
                                     qos,

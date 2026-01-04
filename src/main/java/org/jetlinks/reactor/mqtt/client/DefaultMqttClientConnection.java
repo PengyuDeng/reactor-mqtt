@@ -27,11 +27,12 @@ import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
 import reactor.netty.tcp.TcpClient;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -64,7 +65,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     /**
      * 状态字段: bit0-2=状态标志, bit3-31=重连次数
      * 标志位: bit0=connected, bit1=closed, bit2=reconnecting
-     * AtomicInteger state 布局:</br>
+     * state 布局:</br>
      * ┌─────────────────────────────────┬────┬────┬────┐
      * │  重连次数 (29 bits)              │ R  │ C  │ N  │
      * │  bit 3-31                       │bit2│bit1│bit0│
@@ -73,7 +74,20 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
      * C = CLOSED (2)
      * R = RECONNECTING (4)
      */
-    private final AtomicInteger state = new AtomicInteger(0);
+    private volatile int state = 0;
+
+    private static final VarHandle STATE;
+    private static final VarHandle MESSAGE_ID_GENERATOR;
+
+    static {
+        try {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            STATE = lookup.findVarHandle(DefaultMqttClientConnection.class, "state", int.class);
+            MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultMqttClientConnection.class, "messageIdGenerator", short.class);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     // 状态标志位 (bit 0-2)
     private static final int CONNECTED = 1;
@@ -95,7 +109,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     /**
      * MQTT 消息 ID 生成器,范围 1-65535,循环使用
      */
-    private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
+    private volatile short messageIdGenerator = 0;
 
     /**
      * 统一的 pending 消息映射: key = (MqttMessageType.ordinal << 16) | messageId
@@ -119,10 +133,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
                                        short keepAliveSeconds,
                                        boolean cleanSession,
                                        byte protocolVersion,
-                                       String willTopic,
-                                       ByteBuf willPayload,
-                                       MqttQoS willQos,
-                                       boolean willRetain,
+                                       WillMessage willMessage,
                                        Function<MqttClientPublishing, Mono<Void>> publishingHandler,
                                        boolean autoAck,
                                        MqttQoS qos,
@@ -132,7 +143,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         this.connection = connection;
         this.config = new ConnectionConfig(clientId, username, password, keepAliveSeconds, cleanSession, protocolVersion,
-                                           willTopic, willPayload, willQos, willRetain, publishingHandler, autoAck, qos,
+                                           willMessage, publishingHandler, autoAck, qos,
                                            reconnectStrategy, autoResubscribe);
         this.tcpClientSupplier = tcpClientSupplier;
     }
@@ -200,16 +211,11 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
             }
         }
 
-        if (config.willTopic != null) {
-            byte[] willPayloadBytes = null;
-            if (config.willPayload != null && config.willPayload.readableBytes() > 0) {
-                willPayloadBytes = new byte[config.willPayload.readableBytes()];
-                config.willPayload.getBytes(config.willPayload.readerIndex(), willPayloadBytes);
-            }
-            builder.willTopic(config.willTopic)
-                   .willMessage(willPayloadBytes)
-                   .willQoS(config.willQos)
-                   .willRetain(config.willRetain());
+        if (config.willMessage != null) {
+            builder.willTopic(config.willMessage.topic())
+                   .willMessage(config.willMessage.payloadBytes())
+                   .willQoS(config.willMessage.qos())
+                   .willRetain(config.willMessage.retain());
         }
 
         MqttConnectMessage connectMessage = builder.build();
@@ -265,7 +271,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
             return Mono.empty();
         }
 
-        DefaultMqttClientPublishing publishing = new DefaultMqttClientPublishing(msg, this::send);
+        DefaultMqttClientPublishing publishing = new DefaultMqttClientPublishing(msg, this);
 
         // 发送到消息流
         messageSink.tryEmitNext(publishing);
@@ -634,7 +640,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
         return config.qos;
     }
 
-    private Mono<Void> send(MqttMessage message) {
+    Mono<Void> send(MqttMessage message) {
         return connection.outbound()
                          .sendObject(Mono.just(message))
                          .then();
@@ -648,7 +654,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     private int nextMessageId() {
         int id;
         do {
-            id = messageIdGenerator.incrementAndGet() & 0xFFFF;
+            id = ((short) MESSAGE_ID_GENERATOR.getAndAdd(this, (short) 1) + 1) & 0xFFFF;
         } while (id == 0);
         return id;
     }
@@ -681,11 +687,15 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     private boolean hasFlag(int flag) {
-        return (state.get() & flag) != 0;
+        return ((int) STATE.getVolatile(this) & flag) != 0;
     }
 
     private void setConnectedFlag() {
-        state.updateAndGet(v -> v | DefaultMqttClientConnection.CONNECTED);
+        int prev, next;
+        do {
+            prev = (int) STATE.getVolatile(this);
+            next = prev | CONNECTED;
+        } while (!STATE.compareAndSet(this, prev, next));
     }
 
     /**
@@ -694,22 +704,22 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     private boolean flagAlreadySet(int flag) {
         int prev;
         do {
-            prev = state.get();
+            prev = (int) STATE.getVolatile(this);
             if ((prev & flag) != 0) {
                 return true;  // 已存在
             }
-        } while (!state.compareAndSet(prev, prev | flag));
+        } while (!STATE.compareAndSet(this, prev, prev | flag));
         return false;  // 设置成功
     }
 
     private boolean clearFlag(int flag) {
         int prev;
         do {
-            prev = state.get();
+            prev = (int) STATE.getVolatile(this);
             if ((prev & flag) == 0) {
                 return false;
             }
-        } while (!state.compareAndSet(prev, prev & ~flag));
+        } while (!STATE.compareAndSet(this, prev, prev & ~flag));
         return true;
     }
 
@@ -717,14 +727,18 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
      * 增加重连次数并返回新值
      */
     private int incrementReconnectAttempt() {
-        return (state.addAndGet(ATTEMPT_INCREMENT) >>> 3);
+        return ((int) STATE.getAndAdd(this, ATTEMPT_INCREMENT) + ATTEMPT_INCREMENT) >>> 3;
     }
 
     /**
      * 重置重连次数为0,保留状态标志
      */
     private void resetReconnectAttempt() {
-        state.updateAndGet(v -> v & FLAGS_MASK);
+        int prev, next;
+        do {
+            prev = (int) STATE.getVolatile(this);
+            next = prev & FLAGS_MASK;
+        } while (!STATE.compareAndSet(this, prev, next));
     }
 
     /**
@@ -746,28 +760,24 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
      * 连接配置(不可变)
      */
     private static class ConnectionConfig {
-        // 布尔标志位
         private static final byte FLAG_CLEAN_SESSION = 1;
-        private static final byte FLAG_WILL_RETAIN = 2;
-        private static final byte FLAG_AUTO_ACK = 4;
-        private static final byte FLAG_AUTO_RESUBSCRIBE = 8;
+        private static final byte FLAG_AUTO_ACK = 2;
+        private static final byte FLAG_AUTO_RESUBSCRIBE = 4;
 
         final String clientId;
         final String username;
         final byte[] password;
-        final short keepAliveSeconds;          // 原 int, 改为 short (最大 65535 秒足够)
-        final byte protocolVersion;            // 原 int, 只有 3/5 两个值
-        final byte flags;                      // 4 个布尔值打包
-        final String willTopic;
-        final ByteBuf willPayload;
-        final MqttQoS willQos;
+        final short keepAliveSeconds;
+        final byte protocolVersion;
+        final byte flags;
+        final WillMessage willMessage;
         final MqttQoS qos;
         final Function<MqttClientPublishing, Mono<Void>> publishingHandler;
         final ReconnectStrategy reconnectStrategy;
 
         ConnectionConfig(String clientId, String username, byte[] password,
                          short keepAliveSeconds, boolean cleanSession, byte protocolVersion,
-                         String willTopic, ByteBuf willPayload, MqttQoS willQos, boolean willRetain,
+                         WillMessage willMessage,
                          Function<MqttClientPublishing, Mono<Void>> publishingHandler,
                          boolean autoAck, MqttQoS qos,
                          ReconnectStrategy reconnectStrategy, boolean autoResubscribe) {
@@ -777,12 +787,9 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
             this.keepAliveSeconds = keepAliveSeconds;
             this.protocolVersion = protocolVersion;
             this.flags = (byte) ((cleanSession ? FLAG_CLEAN_SESSION : 0)
-                    | (willRetain ? FLAG_WILL_RETAIN : 0)
                     | (autoAck ? FLAG_AUTO_ACK : 0)
                     | (autoResubscribe ? FLAG_AUTO_RESUBSCRIBE : 0));
-            this.willTopic = willTopic;
-            this.willPayload = willPayload;
-            this.willQos = willQos;
+            this.willMessage = willMessage;
             this.qos = qos;
             this.publishingHandler = publishingHandler;
             this.reconnectStrategy = reconnectStrategy;
@@ -790,10 +797,6 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         boolean cleanSession() {
             return (flags & FLAG_CLEAN_SESSION) != 0;
-        }
-
-        boolean willRetain() {
-            return (flags & FLAG_WILL_RETAIN) != 0;
         }
 
         boolean autoAck() {

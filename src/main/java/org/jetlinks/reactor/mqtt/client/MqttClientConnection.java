@@ -31,25 +31,22 @@ import java.util.function.Function;
  *
  * <h3>使用示例：</h3>
  * <pre>{@code
- * MqttClientConnection conn = MqttClient.create()
+ * MqttClient.create()
  *     .host("127.0.0.1")
  *     .port(1883)
- *     .connectNow();
+ *     .connect()
+ *     .flatMap(conn -> {
+ *         // 订阅主题
+ *         Disposable sub = conn.subscribe("/topic", msg -> {
+ *             System.out.println("Received: " + msg.getTopic());
+ *             return Mono.empty();
+ *         });
  *
- * // 订阅主题
- * Disposable sub = conn.subscribe("/topic", msg -> {
- *     System.out.println("Received: " + msg.getTopic());
- *     return Mono.empty();
- * });
- *
- * // 发布消息
- * conn.publish("/topic", payload, MqttQoS.AT_LEAST_ONCE).block();
- *
- * // 取消订阅
- * sub.dispose();
- *
- * // 关闭连接
- * conn.disconnect().block();
+ *         // 发布消息
+ *         return conn.publish("/topic", payload, MqttQoS.AT_LEAST_ONCE)
+ *                    .then(conn.onClose());
+ *     })
+ *     .subscribe();
  * }</pre>
  *
  * @author PengyuDeng

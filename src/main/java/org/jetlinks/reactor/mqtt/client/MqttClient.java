@@ -38,8 +38,7 @@ import java.util.function.Supplier;
  *
  * <h3>基本用法：</h3>
  * <pre>{@code
- * MqttClientConnection conn = MqttClient
- *     .create()
+ * MqttClient.create()
  *     .host("127.0.0.1")
  *     .port(1883)
  *     .clientId("my-client")
@@ -47,16 +46,15 @@ import java.util.function.Supplier;
  *         System.out.println("Received: " + pub.getTopic());
  *         return Mono.empty();
  *     })
- *     .connectNow();
- *
- * // 订阅
- * Disposable sub = conn.subscribe("/topic", msg -> { ... });
- *
- * // 发布
- * conn.publish("/topic", payload, MqttQoS.AT_LEAST_ONCE).block();
- *
- * // 关闭
- * conn.disconnect().block();
+ *     .connect()
+ *     .flatMap(conn -> {
+ *         // 订阅
+ *         conn.subscribe("/topic", msg -> Mono.empty());
+ *         // 发布
+ *         return conn.publish("/topic", payload, MqttQoS.AT_LEAST_ONCE)
+ *                    .then(conn.onClose());
+ *     })
+ *     .subscribe();
  * }</pre>
  *
  * <h3>自动重连：</h3>
@@ -65,14 +63,13 @@ import java.util.function.Supplier;
  *     .reconnectStrategy(ReconnectStrategy.exponentialBackoff(
  *         Duration.ofSeconds(1),
  *         Duration.ofMinutes(5)))
- *     .connectNow();
+ *     .connect()
+ *     .subscribe();
  * }</pre>
  *
  * @author PengyuDeng
  */
 public class MqttClient {
-
-    // ==================== 连接配置 ====================
 
     /**
      * MQTT 服务器主机地址,默认 127.0.0.1
@@ -120,21 +117,15 @@ public class MqttClient {
      */
     private int maxMessageSize = 8096;
 
-    // ==================== 遗言配置 ====================
-
     /**
      * 遗言消息
      */
     private WillMessage willMessage;
 
-    // ==================== SSL 配置 ====================
-
     /**
      * SSL 上下文,用于加密连接,为 null 时使用明文连接
      */
     private SslContext sslContext;
-
-    // ==================== 重连配置 ====================
 
     /**
      * 重连策略,默认不重连
@@ -145,8 +136,6 @@ public class MqttClient {
      * 重连后是否自动重新订阅之前的主题,默认 true
      */
     private boolean autoResubscribe = true;
-
-    // ==================== 消息处理配置 ====================
 
     /**
      * 全局消息发布处理器,接收所有订阅的消息
@@ -162,8 +151,6 @@ public class MqttClient {
      * 默认 QoS 级别,用于 publish 和 subscribe 方法未指定 QoS 时,默认 QoS 0
      */
     private MqttQoS qos = MqttQoS.AT_MOST_ONCE;
-
-    // ==================== 网络配置 ====================
 
     /**
      * Netty EventLoop 资源,为 null 时使用默认

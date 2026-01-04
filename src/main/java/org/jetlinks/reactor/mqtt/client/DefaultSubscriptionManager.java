@@ -63,7 +63,7 @@ public class DefaultSubscriptionManager implements SubscriptionManager {
         Mono<Void> result = Mono.empty();
 
         for (Map.Entry<String, SubscriptionHandler> entry : subscriptions.entrySet()) {
-            if (topicMatches(entry.getKey(), topic)) {
+            if (TopicMatcher.matches(entry.getKey(), topic)) {
                 SubscriptionHandler handler = entry.getValue();
                 if (handler.handler != null) {
                     result = result.then(handler.handler.apply(publishing));
@@ -85,36 +85,6 @@ public class DefaultSubscriptionManager implements SubscriptionManager {
     @Override
     public void clear() {
         subscriptions.clear();
-    }
-
-    /**
-     * MQTT 主题匹配
-     */
-    private boolean topicMatches(String filter, String topic) {
-        if (filter.equals(topic)) {
-            return true;
-        }
-
-        String[] filterParts = filter.split("/");
-        String[] topicParts = topic.split("/");
-
-        for (int i = 0; i < filterParts.length; i++) {
-            String filterPart = filterParts[i];
-
-            if (filterPart.equals("#")) {
-                return true;
-            }
-
-            if (i >= topicParts.length) {
-                return false;
-            }
-
-            if (!filterPart.equals("+") && !filterPart.equals(topicParts[i])) {
-                return false;
-            }
-        }
-
-        return filterParts.length == topicParts.length;
     }
 
     private static class SubscriptionHandler {

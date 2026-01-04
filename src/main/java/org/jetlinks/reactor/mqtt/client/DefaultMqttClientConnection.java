@@ -65,7 +65,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     /**
      * 状态字段: bit0-2=状态标志, bit3-31=重连次数
      * 标志位: bit0=connected, bit1=closed, bit2=reconnecting
-     * state 布局:</br>
+     * state 布局:
      * ┌─────────────────────────────────┬────┬────┬────┐
      * │  重连次数 (29 bits)              │ R  │ C  │ N  │
      * │  bit 3-31                       │bit2│bit1│bit0│
@@ -281,7 +281,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
         Mono<Void> handlerMono = Mono.empty();
 
         for (Map.Entry<String, SubscriptionHandler> entry : subscriptionHandlers.entrySet()) {
-            if (topicMatches(entry.getKey(), topic)) {
+            if (TopicMatcher.matches(entry.getKey(), topic)) {
                 SubscriptionHandler handler = entry.getValue();
                 if (handler.handler != null) {
                     handlerMono = handlerMono.then(handler.handler.apply(publishing));
@@ -657,33 +657,6 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
             id = ((short) MESSAGE_ID_GENERATOR.getAndAdd(this, (short) 1) + 1) & 0xFFFF;
         } while (id == 0);
         return id;
-    }
-
-    private boolean topicMatches(String filter, String topic) {
-        if (filter.equals(topic)) {
-            return true;
-        }
-
-        String[] filterParts = filter.split("/");
-        String[] topicParts = topic.split("/");
-
-        for (int i = 0; i < filterParts.length; i++) {
-            String filterPart = filterParts[i];
-
-            if (filterPart.equals("#")) {
-                return true;
-            }
-
-            if (i >= topicParts.length) {
-                return false;
-            }
-
-            if (!filterPart.equals("+") && !filterPart.equals(topicParts[i])) {
-                return false;
-            }
-        }
-
-        return filterParts.length == topicParts.length;
     }
 
     private boolean hasFlag(int flag) {

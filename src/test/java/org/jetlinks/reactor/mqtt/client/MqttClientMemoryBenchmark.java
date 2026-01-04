@@ -1,16 +1,12 @@
 package org.jetlinks.reactor.mqtt.client;
 
-import io.netty.handler.codec.mqtt.*;
 import org.jetlinks.reactor.mqtt.server.*;
 import org.openjdk.jol.info.ClassLayout;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
-import reactor.netty.Connection;
 import reactor.netty.DisposableServer;
-import reactor.netty.tcp.TcpClient;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
@@ -29,7 +25,7 @@ class MqttClientMemoryBenchmark {
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
 
     private DisposableServer server;
-    private final List<MqttConnection> serverConnections = new CopyOnWriteArrayList<>();
+    private final List<ServerConnection> serverConnections = new CopyOnWriteArrayList<>();
 
     @AfterEach
     void tearDown() {
@@ -42,13 +38,13 @@ class MqttClientMemoryBenchmark {
     @Test
     void analyzeClientConnectionLayout() {
         System.out.println("=== DefaultMqttClientConnection 对象布局 ===");
-        System.out.println(ClassLayout.parseClass(DefaultMqttClientConnection.class).toPrintable());
+        System.out.println(ClassLayout.parseClass(DefaultClientConnection.class).toPrintable());
     }
 
     @Test
     void analyzeServerConnectionLayout() {
         System.out.println("=== DefaultMqttConnection 对象布局 ===");
-        System.out.println(ClassLayout.parseClass(DefaultMqttConnection.class).toPrintable());
+        System.out.println(ClassLayout.parseClass(DefaultServerConnection.class).toPrintable());
     }
 
     /**
@@ -75,7 +71,7 @@ class MqttClientMemoryBenchmark {
     /**
      * 使用 MqttClient 创建客户端连接
      */
-    private Mono<MqttClientConnection> createClient(String clientId) {
+    private Mono<ClientConnection> createClient(String clientId) {
         return MqttClient.create()
                 .host(HOST)
                 .port(PORT)
@@ -89,7 +85,7 @@ class MqttClientMemoryBenchmark {
     @Test
     void measureClientConnectionMemory() {
         int clientCount = 500;
-        List<MqttClientConnection> clientConnections = new CopyOnWriteArrayList<>();
+        List<ClientConnection> clientConnections = new CopyOnWriteArrayList<>();
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failCount = new AtomicInteger(0);
         AtomicLong memoryBefore = new AtomicLong();
@@ -171,7 +167,7 @@ class MqttClientMemoryBenchmark {
                             System.out.println(ClassLayout.parseInstance(client).toPrintable());
                             System.out.println("实例大小: 56 bytes (不含引用对象)");
                         })
-                        .flatMap(MqttClientConnection::close)
+                        .flatMap(ClientConnection::close)
         ).expectComplete().verify(TIMEOUT);
     }
 

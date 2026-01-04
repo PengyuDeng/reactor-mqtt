@@ -16,13 +16,17 @@
 package org.jetlinks.reactor.mqtt.client;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
+import org.jetlinks.reactor.mqtt.TopicMatcher;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 /**
@@ -32,73 +36,154 @@ import java.util.stream.Collectors;
  */
 public class DefaultSubscriptionManager implements SubscriptionManager {
 
-    private final Map<String, SubscriptionHandler> subscriptions = new ConcurrentHashMap<>();
+    private static final Logger log = Logger.getLogger(DefaultSubscriptionManager.class.getName());
+
+    private final Map<String, SubscriptionHandlers> subscriptions = new ConcurrentHashMap<>();
 
     @Override
-    public Disposable subscribe(MqttClientConnection connection,
+    public Disposable subscribe(ClientConnection connection,
                                 CharSequence topic,
                                 MqttQoS qos,
-                                Function<MqttClientPublishing, Mono<Void>> handler) {
+                                Function<ClientReceivedPublish, Mono<Void>> handler) {
         String topicStr = topic.toString();
-        SubscriptionHandler subHandler = new SubscriptionHandler(topicStr, qos, handler);
-        subscriptions.put(topicStr, subHandler);
 
-        Disposable.Composite composite = Disposables.composite();
+        // 获取或创建订阅处理器容器
+        SubscriptionHandlers handlers = subscriptions.computeIfAbsent(
+                topicStr,
+                k -> new SubscriptionHandlers(topicStr, qos, connection)
+        );
 
-        // 发送订阅请求
-        composite.add(connection.subscribe(topicStr).subscribe());
-
-        // 取消时移除订阅
-        composite.add(() -> {
-            subscriptions.remove(topicStr);
-            connection.unsubscribe(topicStr).subscribe();
-        });
-
-        return composite;
+        // 添加处理器并返回 Disposable
+        return handlers.addHandler(handler);
     }
 
     @Override
-    public Mono<Void> handleMessage(MqttClientPublishing publishing) {
+    public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
         String topic = publishing.getTopic();
-        Mono<Void> result = Mono.empty();
 
-        for (Map.Entry<String, SubscriptionHandler> entry : subscriptions.entrySet()) {
-            if (TopicMatcher.matches(entry.getKey(), topic)) {
-                SubscriptionHandler handler = entry.getValue();
-                if (handler.handler != null) {
-                    result = result.then(handler.handler.apply(publishing));
-                }
-            }
-        }
-
-        return result;
+        // 使用 Flux 并行处理所有匹配的订阅，每个订阅独立隔离错误
+        return Flux.fromIterable(subscriptions.entrySet())
+                   .filter(entry -> TopicMatcher.matches(entry.getKey(), topic))
+                   .flatMap(entry -> entry.getValue().handle(publishing))
+                   .then();
     }
 
     @Override
     public Iterable<SubscriptionInfo> getSubscriptions() {
         return subscriptions.values()
-                           .stream()
-                           .map(h -> (SubscriptionInfo) new SubscriptionInfoImpl(h.topic, h.qos))
-                           .collect(Collectors.toList());
+                            .stream()
+                            .map(h -> (SubscriptionInfo) new SubscriptionInfoImpl(h.topic, h.qos))
+                            .collect(Collectors.toList());
     }
 
     @Override
     public void clear() {
+        subscriptions.values().forEach(SubscriptionHandlers::dispose);
         subscriptions.clear();
     }
 
-    private static class SubscriptionHandler {
-        final String topic;
-        final MqttQoS qos;
-        final Function<MqttClientPublishing, Mono<Void>> handler;
-
-        SubscriptionHandler(String topic, MqttQoS qos, Function<MqttClientPublishing, Mono<Void>> handler) {
-            this.topic = topic;
-            this.qos = qos;
-            this.handler = handler;
-        }
+    /**
+     * 订阅信息实现
+     */
+    private record SubscriptionInfoImpl(String topic, MqttQoS qos) implements SubscriptionInfo {
     }
 
-    private record SubscriptionInfoImpl(String topic, MqttQoS qos) implements SubscriptionInfo {
+    /**
+     * 订阅处理器容器，支持同一主题多个处理器
+     */
+    private class SubscriptionHandlers {
+        private final String topic;
+        private final MqttQoS qos;
+        private final ClientConnection connection;
+        private final java.util.List<Function<ClientReceivedPublish, Mono<Void>>> handlers =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        private volatile boolean subscribed = false;
+        private final Object subscribeLock = new Object();
+
+        SubscriptionHandlers(String topic, MqttQoS qos, ClientConnection connection) {
+            this.topic = topic;
+            this.qos = qos;
+            this.connection = connection;
+        }
+
+        /**
+         * 添加处理器
+         *
+         * @param handler 消息处理器
+         * @return Disposable 用于移除此处理器
+         */
+        Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler) {
+            handlers.add(handler);
+
+            // 第一个处理器时执行实际订阅
+            if (!subscribed) {
+                synchronized (subscribeLock) {
+                    if (!subscribed) {
+                        connection.subscribe(topic, qos).subscribe(
+                                v -> {
+                                },
+                                error -> {
+                                    // 只记录非超时错误，连接关闭时的超时是正常的
+                                    if (!(error instanceof java.util.concurrent.TimeoutException)) {
+                                        log.log(Level.WARNING,
+                                               "Failed to subscribe to topic: " + topic,
+                                               error);
+                                    }
+                                }
+                        );
+                        subscribed = true;
+                    }
+                }
+            }
+
+            // 返回 Disposable 用于移除此处理器
+            return () -> {
+                handlers.remove(handler);
+
+                // 如果没有处理器了，取消订阅并移除容器
+                if (handlers.isEmpty()) {
+                    dispose();
+                    subscriptions.remove(topic);
+                }
+            };
+        }
+
+        /**
+         * 处理消息，调用所有处理器
+         */
+        Mono<Void> handle(ClientReceivedPublish publishing) {
+            return Flux.fromIterable(handlers)
+                       .flatMap(h -> h.apply(publishing)
+                                     .onErrorResume(error -> {
+                                         log.log(Level.WARNING,
+                                                String.format("Handler error for topic [%s]: %s",
+                                                            topic, error.getMessage()),
+                                                error);
+                                         return Mono.empty();
+                                     }))
+                       .then();
+        }
+
+        /**
+         * 清理资源
+         */
+        void dispose() {
+            if (subscribed && connection.isAlive()) {
+                connection.unsubscribe(topic).subscribe(
+                        v -> {
+                        },
+                        error -> {
+                            // 只记录非超时错误，连接关闭时的超时是正常的
+                            if (!(error instanceof java.util.concurrent.TimeoutException)) {
+                                log.log(Level.WARNING,
+                                       "Failed to unsubscribe from topic: " + topic,
+                                       error);
+                            }
+                        }
+                );
+            }
+            subscribed = false;
+            handlers.clear();
+        }
     }
 }

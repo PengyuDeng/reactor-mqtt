@@ -137,7 +137,7 @@ public class MqttClientSendTest {
     /**
      * 在指定时间内持续发送消息
      */
-    private static Mono<Void> sendMessages(MqttClientConnection conn) {
+    private static Mono<Void> sendMessages(ClientConnection conn) {
         long endTime = System.currentTimeMillis() + (TEST_DURATION_SECONDS * 1000L);
 
         return Flux.generate(sink -> {

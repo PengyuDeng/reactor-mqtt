@@ -79,8 +79,8 @@ public class MqttAuth {
             return "MqttAuth{none}";
         }
         return "MqttAuth{" +
-            "username='" + username + '\'' +
-            ", password='***'" +
-            '}';
+                "username='" + username + '\'' +
+                ", password='***'" +
+                '}';
     }
 }

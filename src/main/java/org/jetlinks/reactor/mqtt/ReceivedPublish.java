@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jetlinks.reactor.mqtt.client;
+package org.jetlinks.reactor.mqtt;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttProperties;
@@ -21,13 +21,13 @@ import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import reactor.core.publisher.Mono;
 
 /**
- * MQTT 客户端接收到的发布消息
+ * MQTT 收到的 PUBLISH 消息
  *
- * <p>封装从服务端接收到的 PUBLISH 消息，提供便捷的访问方法。</p>
+ * <p>客户端和服务端共用的接收消息抽象。</p>
  *
  * @author PengyuDeng
  */
-public interface MqttClientPublishing {
+public interface ReceivedPublish extends Acknowledge {
 
     /**
      * 获取消息主题
@@ -59,18 +59,18 @@ public interface MqttClientPublishing {
     }
 
     /**
+     * 获取消息 ID
+     *
+     * @return 消息 ID（QoS 0 时为 0）
+     */
+    int getMessageId();
+
+    /**
      * 获取 QoS 级别
      *
      * @return QoS 级别（0, 1, 2）
      */
     int getQosLevel();
-
-    /**
-     * 是否为保留消息
-     *
-     * @return true 如果是保留消息
-     */
-    boolean isRetain();
 
     /**
      * 是否为重复消息
@@ -80,11 +80,11 @@ public interface MqttClientPublishing {
     boolean isDup();
 
     /**
-     * 获取消息 ID
+     * 是否为保留消息
      *
-     * @return 消息 ID（QoS 0 时为 0）
+     * @return true 如果是保留消息
      */
-    int getMessageId();
+    boolean isRetain();
 
     /**
      * 获取 MQTT 5.0 属性
@@ -99,13 +99,4 @@ public interface MqttClientPublishing {
      * @return 原始消息对象
      */
     MqttPublishMessage getOrigin();
-
-    /**
-     * 手动确认消息（QoS 1/2）
-     *
-     * <p>当 autoAck 设置为 false 时，需要手动调用此方法确认消息。</p>
-     *
-     * @return 确认完成的 Mono
-     */
-    Mono<Void> acknowledge();
 }

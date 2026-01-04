@@ -59,7 +59,7 @@ import reactor.core.publisher.Mono;
  * }</pre>
  *
  * @author PengyuDeng
- * @see MqttConnection#listener(MqttMessageListener)
+ * @see ServerConnection#listener(MqttMessageListener)
  */
 public interface MqttMessageListener {
 
@@ -72,7 +72,7 @@ public interface MqttMessageListener {
      * @param message 发布的消息
      * @return 处理完成的 Mono
      */
-    Mono<Void> onPublish(MqttPublishing message);
+    Mono<Void> onPublish(ServerReceivedPublish message);
 
     /**
      * 处理客户端的订阅请求
@@ -105,5 +105,5 @@ public interface MqttMessageListener {
      * @param connection 断开的连接
      * @return 处理完成的 Mono
      */
-    Mono<Void> onDisconnect(MqttConnection connection);
+    Mono<Void> onDisconnect(ServerConnection connection);
 }

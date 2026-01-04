@@ -18,7 +18,7 @@ package org.jetlinks.reactor.mqtt.server;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import org.jetlinks.reactor.mqtt.client.MqttClient;
-import org.jetlinks.reactor.mqtt.client.MqttClientConnection;
+import org.jetlinks.reactor.mqtt.client.ClientConnection;
 import org.junit.jupiter.api.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -45,7 +45,7 @@ class MqttServerTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
     private DisposableServer server;
-    private MqttClientConnection clientConnection;
+    private ClientConnection clientConnection;
 
     @AfterEach
     void tearDown() {
@@ -60,7 +60,7 @@ class MqttServerTest {
     /**
      * 创建并启动 MQTT 服务器
      */
-    private Mono<DisposableServer> startServer(Function<MqttConnection, Mono<Void>> handler) {
+    private Mono<DisposableServer> startServer(Function<ServerConnection, Mono<Void>> handler) {
         return MqttServer.create()
                          .host(HOST)
                          .port(PORT)
@@ -199,12 +199,12 @@ class MqttServerTest {
 
     @Test
     void testPublishQoS0() {
-        Sinks.One<MqttPublishing> messageSink = Sinks.one();
+        Sinks.One<ServerReceivedPublish> messageSink = Sinks.one();
 
         StepVerifier.create(
             startServer(connection -> connection.listener(new MqttMessageListener() {
                 @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
+                public Mono<Void> onPublish(ServerReceivedPublish message) {
                     messageSink.tryEmitValue(message);
                     return Mono.empty();
                 }
@@ -220,7 +220,7 @@ class MqttServerTest {
                 }
 
                 @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
+                public Mono<Void> onDisconnect(ServerConnection connection) {
                     return Mono.empty();
                 }
             }).accept())
@@ -250,7 +250,7 @@ class MqttServerTest {
         StepVerifier.create(
             startServer(connection -> connection.listener(new MqttMessageListener() {
                 @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
+                public Mono<Void> onPublish(ServerReceivedPublish message) {
                     qosSink.tryEmitValue(message.getQosLevel());
                     return Mono.empty();
                 }
@@ -266,7 +266,7 @@ class MqttServerTest {
                 }
 
                 @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
+                public Mono<Void> onDisconnect(ServerConnection connection) {
                     return Mono.empty();
                 }
             }).accept())
@@ -293,7 +293,7 @@ class MqttServerTest {
         StepVerifier.create(
             startServer(connection -> connection.listener(new MqttMessageListener() {
                 @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
+                public Mono<Void> onPublish(ServerReceivedPublish message) {
                     qosSink.tryEmitValue(message.getQosLevel());
                     return Mono.empty();
                 }
@@ -309,7 +309,7 @@ class MqttServerTest {
                 }
 
                 @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
+                public Mono<Void> onDisconnect(ServerConnection connection) {
                     return Mono.empty();
                 }
             }).accept())
@@ -338,7 +338,7 @@ class MqttServerTest {
         StepVerifier.create(
             startServer(connection -> connection.listener(new MqttMessageListener() {
                 @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
+                public Mono<Void> onPublish(ServerReceivedPublish message) {
                     return Mono.empty();
                 }
 
@@ -354,7 +354,7 @@ class MqttServerTest {
                 }
 
                 @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
+                public Mono<Void> onDisconnect(ServerConnection connection) {
                     return Mono.empty();
                 }
             }).accept())
@@ -380,7 +380,7 @@ class MqttServerTest {
         StepVerifier.create(
             startServer(connection -> connection.listener(new MqttMessageListener() {
                 @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
+                public Mono<Void> onPublish(ServerReceivedPublish message) {
                     return Mono.empty();
                 }
 
@@ -397,7 +397,7 @@ class MqttServerTest {
                 }
 
                 @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
+                public Mono<Void> onDisconnect(ServerConnection connection) {
                     return Mono.empty();
                 }
             }).accept())
@@ -429,7 +429,7 @@ class MqttServerTest {
                 connectedSink.tryEmitValue(true);
                 return connection.listener(new MqttMessageListener() {
                     @Override
-                    public Mono<Void> onPublish(MqttPublishing message) {
+                    public Mono<Void> onPublish(ServerReceivedPublish message) {
                         return Mono.empty();
                     }
 
@@ -444,7 +444,7 @@ class MqttServerTest {
                     }
 
                     @Override
-                    public Mono<Void> onDisconnect(MqttConnection conn) {
+                    public Mono<Void> onDisconnect(ServerConnection conn) {
                         disconnectedSink.tryEmitValue(true);
                         return Mono.empty();
                     }
@@ -476,7 +476,7 @@ class MqttServerTest {
         StepVerifier.create(
             startServer(connection -> connection.listener(new MqttMessageListener() {
                 @Override
-                public Mono<Void> onPublish(MqttPublishing message) {
+                public Mono<Void> onPublish(ServerReceivedPublish message) {
                     int count = messageCount.incrementAndGet();
                     if (count >= expectedCount) {
                         completeSink.tryEmitValue(count);
@@ -495,7 +495,7 @@ class MqttServerTest {
                 }
 
                 @Override
-                public Mono<Void> onDisconnect(MqttConnection connection) {
+                public Mono<Void> onDisconnect(ServerConnection connection) {
                     return Mono.empty();
                 }
             }).accept())
@@ -524,7 +524,7 @@ class MqttServerTest {
      */
     private static class NoOpListener implements MqttMessageListener {
         @Override
-        public Mono<Void> onPublish(MqttPublishing message) {
+        public Mono<Void> onPublish(ServerReceivedPublish message) {
             return Mono.empty();
         }
 
@@ -539,7 +539,7 @@ class MqttServerTest {
         }
 
         @Override
-        public Mono<Void> onDisconnect(MqttConnection connection) {
+        public Mono<Void> onDisconnect(ServerConnection connection) {
             return Mono.empty();
         }
     }

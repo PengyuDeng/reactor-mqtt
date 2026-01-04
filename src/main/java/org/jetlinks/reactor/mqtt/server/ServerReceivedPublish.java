@@ -15,19 +15,18 @@
  */
 package org.jetlinks.reactor.mqtt.server;
 
-import io.netty.handler.codec.mqtt.MqttSubscribeMessage;
-import org.jetlinks.reactor.mqtt.Acknowledge;
+import org.jetlinks.reactor.mqtt.ReceivedPublish;
 
 /**
- * MQTT 订阅请求
  *
  * @author PengyuDeng
  */
-public interface MqttSubscription extends Acknowledge {
+public interface ServerReceivedPublish extends ReceivedPublish {
 
     /**
-     * 获取原始订阅消息
+     * 获取发送消息的客户端 ID
+     *
+     * @return 客户端 ID
      */
-    MqttSubscribeMessage getMessage();
-
+    String getClientId();
 }

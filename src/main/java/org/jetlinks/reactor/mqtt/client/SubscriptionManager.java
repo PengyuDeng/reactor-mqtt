@@ -38,9 +38,9 @@ public interface SubscriptionManager {
      * @param handler    消息处理器
      * @return Disposable 用于取消订阅
      */
-    default Disposable subscribe(MqttClientConnection connection,
+    default Disposable subscribe(ClientConnection connection,
                                  CharSequence topic,
-                                 Function<MqttClientPublishing, Mono<Void>> handler) {
+                                 Function<ClientReceivedPublish, Mono<Void>> handler) {
         return subscribe(connection, topic, MqttQoS.AT_MOST_ONCE, handler);
     }
 
@@ -53,10 +53,10 @@ public interface SubscriptionManager {
      * @param handler    消息处理器
      * @return Disposable 用于取消订阅
      */
-    Disposable subscribe(MqttClientConnection connection,
+    Disposable subscribe(ClientConnection connection,
                          CharSequence topic,
                          MqttQoS qos,
-                         Function<MqttClientPublishing, Mono<Void>> handler);
+                         Function<ClientReceivedPublish, Mono<Void>> handler);
 
     /**
      * 处理收到的消息，分发到匹配的订阅处理器
@@ -64,7 +64,7 @@ public interface SubscriptionManager {
      * @param publishing 收到的消息
      * @return 处理完成的 Mono
      */
-    Mono<Void> handleMessage(MqttClientPublishing publishing);
+    Mono<Void> handleMessage(ClientReceivedPublish publishing);
 
     /**
      * 获取所有订阅的主题（用于重连后重新订阅）
@@ -100,5 +100,16 @@ public interface SubscriptionManager {
      */
     static SubscriptionManager create() {
         return new DefaultSubscriptionManager();
+    }
+
+    /**
+     * 创建基于 Trie 树的高性能订阅管理器
+     *
+     * <p>适合大量订阅的场景，提供 O(L) 的查找复杂度（L 为主题层级数）。</p>
+     *
+     * @return 订阅管理器实例
+     */
+    static SubscriptionManager createTrieBased() {
+        return new TrieBasedSubscriptionManager();
     }
 }

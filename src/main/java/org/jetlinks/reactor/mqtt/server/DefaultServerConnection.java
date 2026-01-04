@@ -19,6 +19,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
+import org.jetlinks.reactor.mqtt.MqttWillMessage;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -41,9 +42,9 @@ import java.util.logging.Logger;
  *
  * @author PengyuDeng
  */
-public class DefaultMqttConnection implements MqttConnection {
+public class DefaultServerConnection implements ServerConnection {
 
-    private static final Logger log = Logger.getLogger(DefaultMqttConnection.class.getName());
+    private static final Logger log = Logger.getLogger(DefaultServerConnection.class.getName());
 
     private static final VarHandle STATE;
     private static final VarHandle LAST_PING_TIME;
@@ -52,9 +53,9 @@ public class DefaultMqttConnection implements MqttConnection {
     static {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
-            STATE = lookup.findVarHandle(DefaultMqttConnection.class, "state", byte.class);
-            LAST_PING_TIME = lookup.findVarHandle(DefaultMqttConnection.class, "lastPingTime", long.class);
-            KEEP_ALIVE_TIMEOUT_MS = lookup.findVarHandle(DefaultMqttConnection.class, "keepAliveTimeoutMs", long.class);
+            STATE = lookup.findVarHandle(DefaultServerConnection.class, "state", byte.class);
+            LAST_PING_TIME = lookup.findVarHandle(DefaultServerConnection.class, "lastPingTime", long.class);
+            KEEP_ALIVE_TIMEOUT_MS = lookup.findVarHandle(DefaultServerConnection.class, "keepAliveTimeoutMs", long.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -84,7 +85,7 @@ public class DefaultMqttConnection implements MqttConnection {
 
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
-    public DefaultMqttConnection(NettyInbound inbound, NettyOutbound outbound) {
+    public DefaultServerConnection(NettyInbound inbound, NettyOutbound outbound) {
         this.inbound = inbound;
         this.outbound = outbound;
         this.connection = (Connection) inbound;
@@ -106,12 +107,12 @@ public class DefaultMqttConnection implements MqttConnection {
      * @param handler 连接处理器
      * @return 连接完整生命周期的 Mono
      */
-    public Mono<Void> run(Function<MqttConnection, Mono<Void>> handler) {
+    public Mono<Void> run(Function<ServerConnection, Mono<Void>> handler) {
         return handleInbound()
                 .mergeWith(awaitConnect()
                                    .flatMap(msg -> handler != null ? handler.apply(this) : accept())
                                    .onErrorResume(err -> close()))
-                .then(onDispose());
+                .then(onClose());
     }
 
     /**
@@ -220,7 +221,7 @@ public class DefaultMqttConnection implements MqttConnection {
             return Mono.empty();
         }
 
-        DefaultMqttPublishing publishing = new DefaultMqttPublishing(msg, clientId, this::send);
+        DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, clientId, this::send);
 
         if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
             Mono<Void> handler = messageListener.onPublish(publishing);
@@ -236,7 +237,7 @@ public class DefaultMqttConnection implements MqttConnection {
     }
 
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {
-        DefaultMqttSubscription sub = new DefaultMqttSubscription(msg, this::send);
+        DefaultMqttSubscription sub = new DefaultMqttSubscription(msg, this);
 
         if (messageListener != null) {
             return messageListener.onSubscribe(sub)
@@ -247,7 +248,7 @@ public class DefaultMqttConnection implements MqttConnection {
     }
 
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
-        DefaultMqttUnsubscription unsub = new DefaultMqttUnsubscription(msg, this::send);
+        DefaultMqttUnsubscription unsub = new DefaultMqttUnsubscription(msg, this);
 
         if (messageListener != null) {
             return messageListener.onUnsubscribe(unsub)
@@ -280,7 +281,7 @@ public class DefaultMqttConnection implements MqttConnection {
         return send(pingResp);
     }
 
-    private Mono<Void> send(Object msg) {
+    Mono<Void> send(MqttMessage msg) {
         return outbound.sendObject(Mono.just(msg)).then();
     }
 
@@ -342,26 +343,26 @@ public class DefaultMqttConnection implements MqttConnection {
     }
 
     @Override
-    public MqttWill getWill() {
+    public MqttWillMessage getWill() {
         if (connectMessage == null || !connectMessage.variableHeader().isWillFlag()) {
-            return MqttWill.EMPTY;
+            return MqttWillMessage.EMPTY;
         }
         byte[] willPayload = connectMessage.payload().willMessageInBytes();
         String topic = connectMessage.payload().willTopic();
         ByteBuf payload = willPayload != null ? Unpooled.wrappedBuffer(willPayload) : null;
         MqttQoS qos = MqttQoS.valueOf(connectMessage.variableHeader().willQos());
         boolean retain = connectMessage.variableHeader().isWillRetain();
-        return new MqttWill(true, topic, payload, qos, retain, MqttProperties.NO_PROPERTIES);
+        return new MqttWillMessage(topic, payload, qos, retain, MqttProperties.NO_PROPERTIES);
     }
 
     @Override
-    public MqttConnection listener(MqttMessageListener listener) {
+    public ServerConnection listener(MqttMessageListener listener) {
         this.messageListener = listener;
         return this;
     }
 
     @Override
-    public MqttConnection autoAck(boolean autoAck) {
+    public ServerConnection autoAck(boolean autoAck) {
         this.autoAck = autoAck;
         return this;
     }
@@ -413,7 +414,7 @@ public class DefaultMqttConnection implements MqttConnection {
     }
 
     @Override
-    public Mono<Void> onDispose() {
+    public Mono<Void> onClose() {
         return disposeSink.asMono();
     }
 

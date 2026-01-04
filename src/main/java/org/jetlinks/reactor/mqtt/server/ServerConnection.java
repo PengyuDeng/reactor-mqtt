@@ -16,14 +16,17 @@
 package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.codec.mqtt.MqttConnectReturnCode;
-import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import org.jetlinks.reactor.mqtt.MqttConnection;
+import org.jetlinks.reactor.mqtt.MqttWillMessage;
 import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
 
 /**
- * MQTT 连接接口 - 纯响应式 API
+ * MQTT 服务端连接接口 - 纯响应式 API
+ *
+ * <p>扩展公共连接接口，增加服务端特有的方法。</p>
  *
  * <pre>{@code
  * MqttServer.create()
@@ -49,12 +52,7 @@ import java.time.Duration;
  *
  * @author PengyuDeng
  */
-public interface MqttConnection {
-
-    /**
-     * 获取客户端 ID
-     */
-    String getClientId();
+public interface ServerConnection extends MqttConnection {
 
     /**
      * 获取认证信息
@@ -74,7 +72,7 @@ public interface MqttConnection {
     /**
      * 获取遗言消息
      */
-    MqttWill getWill();
+    MqttWillMessage getWill();
 
     /**
      * 设置响应式消息监听器
@@ -97,13 +95,13 @@ public interface MqttConnection {
      * @return 当前连接实例（支持链式调用）
      * @see MqttMessageListener
      */
-    MqttConnection listener(MqttMessageListener listener);
+    ServerConnection listener(MqttMessageListener listener);
 
     /**
      * 设置是否自动应答 QoS > 0 的消息
      * <p>
      * 当设置为 true（默认）时，服务端在 {@link MqttMessageListener#onPublish} 处理完成后自动发送 ACK。
-     * 当设置为 false 时，需要处理者手动调用 {@link MqttPublishing#acknowledge()} 进行应答。
+     * 当设置为 false 时，需要处理者手动调用 {@link ServerReceivedPublish#acknowledge()} 进行应答。
      * </p>
      *
      * <p>手动应答示例：</p>
@@ -121,27 +119,7 @@ public interface MqttConnection {
      * @param autoAck true 自动应答（默认），false 手动应答
      * @return 当前连接实例（支持链式调用）
      */
-    MqttConnection autoAck(boolean autoAck);
-
-    /**
-     * 发布消息到客户端
-     */
-    Mono<Void> publish(MqttPublishMessage message);
-
-    /**
-     * 连接关闭事件
-     */
-    Mono<Void> onDispose();
-
-    /**
-     * 连接是否存活
-     */
-    boolean isAlive();
-
-    /**
-     * 关闭连接
-     */
-    Mono<Void> close();
+    ServerConnection autoAck(boolean autoAck);
 
     /**
      * 获取最后一次 ping 时间

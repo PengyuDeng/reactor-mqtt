@@ -28,10 +28,10 @@ import java.lang.invoke.VarHandle;
  *
  * @author PengyuDeng
  */
-public class DefaultMqttClientPublishing implements MqttClientPublishing {
+public class DefaultClientReceivedPublish implements ClientReceivedPublish {
 
     private final MqttPublishMessage message;
-    private final DefaultMqttClientConnection connection;
+    private final DefaultClientConnection connection;
     private volatile boolean acknowledged = false;
     private volatile boolean released = false;
 
@@ -41,14 +41,14 @@ public class DefaultMqttClientPublishing implements MqttClientPublishing {
     static {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
-            ACKNOWLEDGED = lookup.findVarHandle(DefaultMqttClientPublishing.class, "acknowledged", boolean.class);
-            RELEASED = lookup.findVarHandle(DefaultMqttClientPublishing.class, "released", boolean.class);
+            ACKNOWLEDGED = lookup.findVarHandle(DefaultClientReceivedPublish.class, "acknowledged", boolean.class);
+            RELEASED = lookup.findVarHandle(DefaultClientReceivedPublish.class, "released", boolean.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
     }
 
-    public DefaultMqttClientPublishing(MqttPublishMessage message, DefaultMqttClientConnection connection) {
+    public DefaultClientReceivedPublish(MqttPublishMessage message, DefaultClientConnection connection) {
         this.message = message;
         this.connection = connection;
     }

@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class MqttClientTest {
 
     private DisposableServer server;
-    private MqttClientConnection clientConnection;
+    private ClientConnection clientConnection;
     private static final int PORT = 11883;
     private static final String VALID_USERNAME = "testuser";
     private static final String VALID_PASSWORD = "testpass";
@@ -77,7 +77,7 @@ class MqttClientTest {
                              // 无认证信息或认证通过，接受连接
                              connection.listener(new MqttMessageListener() {
                                  @Override
-                                 public Mono<Void> onPublish(MqttPublishing message) {
+                                 public Mono<Void> onPublish(ServerReceivedPublish message) {
                                      return Mono.empty();
                                  }
 
@@ -92,7 +92,7 @@ class MqttClientTest {
                                  }
 
                                  @Override
-                                 public Mono<Void> onDisconnect(MqttConnection connection) {
+                                 public Mono<Void> onDisconnect(ServerConnection connection) {
                                      return Mono.empty();
                                  }
                              });
@@ -418,5 +418,145 @@ class MqttClientTest {
                     )
                     .expectComplete()
                     .verify(TIMEOUT);
+    }
+
+    @Test
+    void testSubscriptionManagerWithDifferentTopics() {
+        AtomicInteger topic1Count = new AtomicInteger(0);
+        AtomicInteger topic2Count = new AtomicInteger(0);
+        AtomicInteger wildcardCount = new AtomicInteger(0);
+        AtomicInteger sensor1Count = new AtomicInteger(0);
+        AtomicInteger sensor2Count = new AtomicInteger(0);
+
+        // 创建支持消息回环（loopback）的服务器
+        Mono<DisposableServer> server = MqttServer.create()
+                .host("127.0.0.1")
+                .port(PORT)
+                .handle(connection -> {
+                    connection.listener(new MqttMessageListener() {
+                        @Override
+                        public Mono<Void> onPublish(ServerReceivedPublish message) {
+                            // 将消息回传给发送者（模拟订阅匹配）
+                            // retain 消息以避免引用计数问题
+                            io.netty.util.ReferenceCountUtil.retain(message.getOrigin());
+                            return connection.publish(message.getOrigin());
+                        }
+
+                        @Override
+                        public Mono<Void> onSubscribe(MqttSubscription subscription) {
+                            return Mono.empty();
+                        }
+
+                        @Override
+                        public Mono<Void> onUnsubscribe(MqttUnsubscription unsubscription) {
+                            return Mono.empty();
+                        }
+
+                        @Override
+                        public Mono<Void> onDisconnect(ServerConnection connection) {
+                            return Mono.empty();
+                        }
+                    });
+                    return connection.accept();
+                })
+                .bind()
+                .map(s -> {
+                    this.server = s;
+                    return s;
+                });
+
+        StepVerifier.create(server
+                                    .then(MqttClient.create()
+                                                    .host("127.0.0.1")
+                                                    .port(PORT)
+                                                    .clientId("test-subscription-manager")
+                                                    .connect())
+                                    .flatMap(conn -> {
+                                        clientConnection = conn;
+
+                                        // 订阅精确主题 - 不同 QoS
+                                        Disposable sub1 = conn.subscribe("/home/temperature", MqttQoS.AT_MOST_ONCE, msg -> {
+                                            topic1Count.incrementAndGet();
+                                            String payload = msg.getPayload().toString(StandardCharsets.UTF_8);
+                                            assertTrue(payload.contains("temperature"));
+                                            return msg.acknowledge();
+                                        });
+
+                                        Disposable sub2 = conn.subscribe("/home/humidity", MqttQoS.AT_LEAST_ONCE, msg -> {
+                                            topic2Count.incrementAndGet();
+                                            String payload = msg.getPayload().toString(StandardCharsets.UTF_8);
+                                            assertTrue(payload.contains("humidity"));
+                                            return msg.acknowledge();
+                                        });
+
+                                        // 订阅通配符主题 - 匹配所有 /sensor/# 主题
+                                        Disposable sub3 = conn.subscribe("/sensor/#", MqttQoS.EXACTLY_ONCE, msg -> {
+                                            wildcardCount.incrementAndGet();
+                                            return msg.acknowledge();
+                                        });
+
+                                        // 订阅单层通配符 - 匹配 /sensor/+/data
+                                        Disposable sub4 = conn.subscribe("/sensor/+/data", MqttQoS.AT_LEAST_ONCE, msg -> {
+                                            String topic = msg.getTopic();
+                                            if (topic.contains("sensor1")) {
+                                                sensor1Count.incrementAndGet();
+                                            } else if (topic.contains("sensor2")) {
+                                                sensor2Count.incrementAndGet();
+                                            }
+                                            return msg.acknowledge();
+                                        });
+
+                                        // 等待订阅完成
+                                        return Mono.delay(Duration.ofMillis(500))
+                                                   .then(Mono.defer(() -> {
+                                                       // 发布到不同主题
+                                                       return Mono.when(
+                                                               // 发布到 /home/temperature (应该被 sub1 接收)
+                                                               conn.publish("/home/temperature",
+                                                                           Unpooled.wrappedBuffer("temperature: 25.5".getBytes(StandardCharsets.UTF_8)),
+                                                                           MqttQoS.AT_MOST_ONCE),
+                                                               // 发布到 /home/humidity (应该被 sub2 接收)
+                                                               conn.publish("/home/humidity",
+                                                                           Unpooled.wrappedBuffer("humidity: 60%".getBytes(StandardCharsets.UTF_8)),
+                                                                           MqttQoS.AT_LEAST_ONCE),
+                                                               // 发布到 /sensor/sensor1/data (应该被 sub3 和 sub4 接收)
+                                                               conn.publish("/sensor/sensor1/data",
+                                                                           Unpooled.wrappedBuffer("sensor1 data".getBytes(StandardCharsets.UTF_8)),
+                                                                           MqttQoS.EXACTLY_ONCE),
+                                                               // 发布到 /sensor/sensor2/data (应该被 sub3 和 sub4 接收)
+                                                               conn.publish("/sensor/sensor2/data",
+                                                                           Unpooled.wrappedBuffer("sensor2 data".getBytes(StandardCharsets.UTF_8)),
+                                                                           MqttQoS.AT_LEAST_ONCE),
+                                                               // 发布到 /sensor/other (只应该被 sub3 接收，不被 sub4 接收)
+                                                               conn.publish("/sensor/other",
+                                                                           Unpooled.wrappedBuffer("other data".getBytes(StandardCharsets.UTF_8)),
+                                                                           MqttQoS.AT_LEAST_ONCE),
+                                                               // 发布到不匹配的主题 (不应该被任何订阅接收)
+                                                               conn.publish("/other/topic",
+                                                                           Unpooled.wrappedBuffer("unmatched".getBytes(StandardCharsets.UTF_8)),
+                                                                           MqttQoS.AT_MOST_ONCE)
+                                                       );
+                                                   }))
+                                                   // 等待消息被接收和处理
+                                                   .then(Mono.delay(Duration.ofMillis(500)))
+                                                   .then(Mono.fromRunnable(() -> {
+                                                       // 验证消息计数
+                                                       assertEquals(1, topic1Count.get(), "/home/temperature 应该收到 1 条消息");
+                                                       assertEquals(1, topic2Count.get(), "/home/humidity 应该收到 1 条消息");
+                                                       assertEquals(3, wildcardCount.get(), "/sensor/# 应该收到 3 条消息");
+                                                       assertEquals(1, sensor1Count.get(), "/sensor/sensor1/data 应该收到 1 条消息");
+                                                       assertEquals(1, sensor2Count.get(), "/sensor/sensor2/data 应该收到 1 条消息");
+
+                                                       // 清理订阅
+                                                       sub1.dispose();
+                                                       sub2.dispose();
+                                                       sub3.dispose();
+                                                       sub4.dispose();
+                                                   }))
+                                                   .then(conn.disconnect());
+                                    })
+                    )
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(10));
     }
 }

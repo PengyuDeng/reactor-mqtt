@@ -18,7 +18,7 @@ package org.jetlinks.reactor.mqtt.server;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import org.jetlinks.reactor.mqtt.client.MqttClient;
-import org.jetlinks.reactor.mqtt.client.MqttClientConnection;
+import org.jetlinks.reactor.mqtt.client.ClientConnection;
 import org.junit.jupiter.api.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -46,7 +46,7 @@ class ServerMessageIdGenerationTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
     private DisposableServer server;
-    private MqttClientConnection clientConnection;
+    private ClientConnection clientConnection;
 
     @AfterEach
     void tearDown() {
@@ -64,7 +64,7 @@ class ServerMessageIdGenerationTest {
     @Test
     void testServerPublishQos1WithZeroIdGeneratesMessageId() {
         Sinks.One<Integer> messageIdSink = Sinks.one();
-        Sinks.One<MqttConnection> connSink = Sinks.one();
+        Sinks.One<ServerConnection> connSink = Sinks.one();
 
         StepVerifier.create(
             // 启动 Server
@@ -120,7 +120,7 @@ class ServerMessageIdGenerationTest {
     void testServerPublishQos1WithValidIdKeepsOriginalId() {
         final int EXPECTED_MESSAGE_ID = 12345;
         Sinks.One<Integer> messageIdSink = Sinks.one();
-        Sinks.One<MqttConnection> connSink = Sinks.one();
+        Sinks.One<ServerConnection> connSink = Sinks.one();
 
         StepVerifier.create(
             // 启动 Server
@@ -174,7 +174,7 @@ class ServerMessageIdGenerationTest {
      */
     @Test
     void testServerPublishQos0NoMessageId() {
-        Sinks.One<MqttConnection> connSink = Sinks.one();
+        Sinks.One<ServerConnection> connSink = Sinks.one();
         Sinks.One<String> topicSink = Sinks.one();
 
         StepVerifier.create(
@@ -227,7 +227,7 @@ class ServerMessageIdGenerationTest {
      */
     @Test
     void testServerPublishMultipleMessagesWithIncrementingIds() {
-        Sinks.One<MqttConnection> connSink = Sinks.one();
+        Sinks.One<ServerConnection> connSink = Sinks.one();
         Set<Integer> receivedIds = ConcurrentHashMap.newKeySet();
         AtomicInteger messageCount = new AtomicInteger(0);
         Sinks.One<Set<Integer>> completeSink = Sinks.one();
@@ -294,7 +294,7 @@ class ServerMessageIdGenerationTest {
     @Test
     void testServerPublishQos2WithZeroId() {
         Sinks.One<Integer> messageIdSink = Sinks.one();
-        Sinks.One<MqttConnection> connSink = Sinks.one();
+        Sinks.One<ServerConnection> connSink = Sinks.one();
 
         StepVerifier.create(
             // 启动 Server
@@ -348,7 +348,7 @@ class ServerMessageIdGenerationTest {
      */
     private static class NoOpListener implements MqttMessageListener {
         @Override
-        public Mono<Void> onPublish(MqttPublishing message) {
+        public Mono<Void> onPublish(ServerReceivedPublish message) {
             return Mono.empty();
         }
 
@@ -363,7 +363,7 @@ class ServerMessageIdGenerationTest {
         }
 
         @Override
-        public Mono<Void> onDisconnect(MqttConnection connection) {
+        public Mono<Void> onDisconnect(ServerConnection connection) {
             return Mono.empty();
         }
     }

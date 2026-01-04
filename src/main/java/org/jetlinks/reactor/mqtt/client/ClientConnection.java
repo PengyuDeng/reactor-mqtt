@@ -17,6 +17,7 @@ package org.jetlinks.reactor.mqtt.client;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttQoS;
+import org.jetlinks.reactor.mqtt.MqttConnection;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -27,7 +28,7 @@ import java.util.function.Function;
 /**
  * MQTT 客户端连接接口
  *
- * <p>提供响应式 API 进行消息发布、订阅和连接管理。</p>
+ * <p>扩展公共连接接口，提供响应式 API 进行消息发布、订阅和连接管理。</p>
  *
  * <h3>使用示例：</h3>
  * <pre>{@code
@@ -51,7 +52,7 @@ import java.util.function.Function;
  *
  * @author PengyuDeng
  */
-public interface MqttClientConnection {
+public interface ClientConnection extends MqttConnection {
 
     /**
      * 获取默认 QoS 级别
@@ -103,7 +104,7 @@ public interface MqttClientConnection {
      * @param handler 消息处理器
      * @return Disposable 用于取消订阅
      */
-    default Disposable subscribe(String topic, Function<MqttClientPublishing, Mono<Void>> handler) {
+    default Disposable subscribe(String topic, Function<ClientReceivedPublish, Mono<Void>> handler) {
         return subscribe(topic, getQos(), handler);
     }
 
@@ -115,7 +116,16 @@ public interface MqttClientConnection {
      * @param handler 消息处理器
      * @return Disposable 用于取消订阅
      */
-    Disposable subscribe(String topic, MqttQoS qos, Function<MqttClientPublishing, Mono<Void>> handler);
+    Disposable subscribe(String topic, MqttQoS qos, Function<ClientReceivedPublish, Mono<Void>> handler);
+
+    /**
+     * 订阅单个主题（不带处理器）
+     *
+     * @param topic 主题
+     * @param qos   最大 QoS 级别
+     * @return 订阅完成的 Mono
+     */
+    Mono<Void> subscribe(String topic, MqttQoS qos);
 
     /**
      * 订阅多个主题
@@ -156,28 +166,16 @@ public interface MqttClientConnection {
      *
      * @return 消息流
      */
-    Flux<MqttClientPublishing> receive();
+    Flux<ClientReceivedPublish> receive();
 
     /**
      * 连接是否存活
      *
      * @return true 如果已连接
      */
-    boolean isConnected();
-
-    /**
-     * 连接关闭事件
-     *
-     * @return 关闭时完成的 Mono
-     */
-    Mono<Void> onClose();
-
-    /**
-     * 关闭连接（不发送 DISCONNECT）
-     *
-     * @return 关闭完成的 Mono
-     */
-    Mono<Void> close();
+    default boolean isConnected() {
+        return isAlive();
+    }
 
     /**
      * 优雅断开连接（发送 DISCONNECT 后关闭）
@@ -185,11 +183,4 @@ public interface MqttClientConnection {
      * @return 断开完成的 Mono
      */
     Mono<Void> disconnect();
-
-    /**
-     * 获取客户端 ID
-     *
-     * @return 客户端 ID
-     */
-    String getClientId();
 }

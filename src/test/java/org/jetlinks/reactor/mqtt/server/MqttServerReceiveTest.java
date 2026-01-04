@@ -71,7 +71,7 @@ public class MqttServerReceiveTest {
 
                                                 return connection.listener(new MqttMessageListener() {
                                                     @Override
-                                                    public Mono<Void> onPublish(MqttPublishing message) {
+                                                    public Mono<Void> onPublish(ServerReceivedPublish message) {
                                                         receivedMessages.increment();
                                                         return Mono.empty();
                                                     }
@@ -87,7 +87,7 @@ public class MqttServerReceiveTest {
                                                     }
 
                                                     @Override
-                                                    public Mono<Void> onDisconnect(MqttConnection conn) {
+                                                    public Mono<Void> onDisconnect(ServerConnection conn) {
                                                         connectedClients.decrement();
                                                         System.out.println("客户端断开: " + conn.getClientId());
                                                         return Mono.empty();

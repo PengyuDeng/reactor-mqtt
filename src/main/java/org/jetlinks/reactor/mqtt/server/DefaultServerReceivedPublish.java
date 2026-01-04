@@ -24,11 +24,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
- * MQTT 发布消息实现
  *
  * @author PengyuDeng
  */
-public class DefaultMqttPublishing implements MqttPublishing {
+public class DefaultServerReceivedPublish implements ServerReceivedPublish {
 
     private final MqttPublishMessage message;
     private final String clientId;
@@ -36,7 +35,7 @@ public class DefaultMqttPublishing implements MqttPublishing {
     private final AtomicBoolean acknowledged = new AtomicBoolean(false);
     private final AtomicBoolean released = new AtomicBoolean(false);
 
-    public DefaultMqttPublishing(MqttPublishMessage message, String clientId, Function<MqttMessage, Mono<Void>> sender) {
+    public DefaultServerReceivedPublish(MqttPublishMessage message, String clientId, Function<MqttMessage, Mono<Void>> sender) {
         this.message = message;
         this.clientId = clientId;
         this.sender = sender;

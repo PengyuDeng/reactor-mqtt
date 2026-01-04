@@ -113,12 +113,12 @@ public class MqttServer {
 
     private static final Logger log = Logger.getLogger(MqttServer.class.getName());
 
-    private String host = "0.0.0.0";
+    private String host = "127.0.0.1";
     private int port = 1883;
     private int maxMessageSize = 8096;
     private Duration idleTimeout = Duration.ofSeconds(120);
     private SslContext sslContext;
-    private Function<MqttConnection, Mono<Void>> connectionHandler;
+    private Function<ServerConnection, Mono<Void>> connectionHandler;
 
     private LoopResources loopResources;
     private int workerCount = Runtime.getRuntime().availableProcessors();
@@ -242,7 +242,7 @@ public class MqttServer {
      *
      * @param handler 连接处理函数
      */
-    public MqttServer handle(Function<MqttConnection, Mono<Void>> handler) {
+    public MqttServer handle(Function<ServerConnection, Mono<Void>> handler) {
         this.connectionHandler = handler;
         return this;
     }
@@ -303,18 +303,18 @@ public class MqttServer {
     }
 
     private Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
-        return new DefaultMqttConnection(inbound, outbound).run(this::invokeHandler);
+        return new DefaultServerConnection(inbound, outbound).run(this::invokeHandler);
     }
 
 
-    private Mono<Void> invokeHandler(MqttConnection mqttConnection) {
+    private Mono<Void> invokeHandler(ServerConnection serverConnection) {
         if (connectionHandler == null) {
-            return mqttConnection.accept();
+            return serverConnection.accept();
         }
-        return connectionHandler.apply(mqttConnection)
+        return connectionHandler.apply(serverConnection)
                                 .onErrorResume(err -> {
                                     log.log(Level.SEVERE, "处理 MQTT 连接时出错: " + err.getMessage(), err);
-                                    return mqttConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
+                                    return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
                                 });
     }
 }

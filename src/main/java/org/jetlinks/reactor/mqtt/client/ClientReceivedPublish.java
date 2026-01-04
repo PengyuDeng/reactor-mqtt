@@ -13,21 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jetlinks.reactor.mqtt.server;
+package org.jetlinks.reactor.mqtt.client;
 
-import io.netty.handler.codec.mqtt.MqttSubscribeMessage;
-import org.jetlinks.reactor.mqtt.Acknowledge;
+import org.jetlinks.reactor.mqtt.ReceivedPublish;
 
 /**
- * MQTT 订阅请求
+ * MQTT 客户端接收到的发布消息
+ *
+ * <p>封装从服务端接收到的 PUBLISH 消息，提供便捷的访问方法。</p>
  *
  * @author PengyuDeng
  */
-public interface MqttSubscription extends Acknowledge {
-
-    /**
-     * 获取原始订阅消息
-     */
-    MqttSubscribeMessage getMessage();
-
+public interface ClientReceivedPublish extends ReceivedPublish {
 }

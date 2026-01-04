@@ -19,6 +19,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
+import org.jetlinks.reactor.mqtt.MqttWillMessage;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
@@ -43,9 +44,9 @@ import java.util.logging.Logger;
  *
  * @author PengyuDeng
  */
-public class DefaultMqttClientConnection implements MqttClientConnection {
+public class DefaultClientConnection implements ClientConnection {
 
-    private static final Logger log = Logger.getLogger(DefaultMqttClientConnection.class.getName());
+    private static final Logger log = Logger.getLogger(DefaultClientConnection.class.getName());
 
     /**
      * 连接配置,包含所有 MQTT 连接参数
@@ -82,8 +83,8 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     static {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
-            STATE = lookup.findVarHandle(DefaultMqttClientConnection.class, "state", int.class);
-            MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultMqttClientConnection.class, "messageIdGenerator", short.class);
+            STATE = lookup.findVarHandle(DefaultClientConnection.class, "state", int.class);
+            MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultClientConnection.class, "messageIdGenerator", short.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -117,34 +118,38 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     private final Map<Integer, Sinks.Empty<Void>> pendingAcks = new ConcurrentHashMap<>();
 
     /**
-     * 订阅处理器映射,key 为主题,value 为处理器(同时用于重连后自动重新订阅)
+     * 订阅管理器,统一管理订阅和处理器
      */
-    private final Map<String, SubscriptionHandler> subscriptionHandlers = new ConcurrentHashMap<>();
+    private final SubscriptionManager subscriptionManager = SubscriptionManager.create();
 
     /**
      * 接收到的消息流,支持多个订阅者
      */
-    private final Sinks.Many<MqttClientPublishing> messageSink = Sinks.many().multicast().onBackpressureBuffer();
+    private final Sinks.Many<ClientReceivedPublish> messageSink = Sinks.many().multicast().onBackpressureBuffer();
 
-    public DefaultMqttClientConnection(Connection connection,
-                                       String clientId,
-                                       String username,
-                                       byte[] password,
-                                       short keepAliveSeconds,
-                                       boolean cleanSession,
-                                       byte protocolVersion,
-                                       WillMessage willMessage,
-                                       Function<MqttClientPublishing, Mono<Void>> publishingHandler,
-                                       boolean autoAck,
-                                       MqttQoS qos,
-                                       ReconnectStrategy reconnectStrategy,
-                                       boolean autoResubscribe,
-                                       Supplier<TcpClient> tcpClientSupplier) {
+    public DefaultClientConnection(Connection connection,
+                                   String clientId,
+                                   String username,
+                                   byte[] password,
+                                   short keepAliveSeconds,
+                                   boolean cleanSession,
+                                   byte protocolVersion,
+                                   MqttWillMessage willMessage,
+                                   Function<ClientReceivedPublish, Mono<Void>> publishingHandler,
+                                   boolean autoAck,
+                                   MqttQoS qos,
+                                   ReconnectStrategy reconnectStrategy,
+                                   boolean autoResubscribe,
+                                   Supplier<TcpClient> tcpClientSupplier,
+                                   Duration subscribeTimeout,
+                                   Duration unsubscribeTimeout,
+                                   Duration publishTimeout) {
 
         this.connection = connection;
         this.config = new ConnectionConfig(clientId, username, password, keepAliveSeconds, cleanSession, protocolVersion,
                                            willMessage, publishingHandler, autoAck, qos,
-                                           reconnectStrategy, autoResubscribe);
+                                           reconnectStrategy, autoResubscribe,
+                                           subscribeTimeout, unsubscribeTimeout, publishTimeout);
         this.tcpClientSupplier = tcpClientSupplier;
     }
 
@@ -155,7 +160,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     /**
      * 初始化连接（发送 CONNECT，等待 CONNACK）
      */
-    Mono<MqttClientConnection> initialize() {
+    Mono<ClientConnection> initialize() {
         ensureMqttCodec();
         setupConnectionHandlers();
         return sendConnect()
@@ -211,7 +216,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
             }
         }
 
-        if (config.willMessage != null) {
+        if (config.willMessage != null && config.willMessage.hasWill()) {
             builder.willTopic(config.willMessage.topic())
                    .willMessage(config.willMessage.payloadBytes())
                    .willQoS(config.willMessage.qos())
@@ -271,23 +276,13 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
             return Mono.empty();
         }
 
-        DefaultMqttClientPublishing publishing = new DefaultMqttClientPublishing(msg, this);
+        DefaultClientReceivedPublish publishing = new DefaultClientReceivedPublish(msg, this);
 
         // 发送到消息流
         messageSink.tryEmitNext(publishing);
 
-        // 匹配订阅处理器
-        String topic = msg.variableHeader().topicName();
-        Mono<Void> handlerMono = Mono.empty();
-
-        for (Map.Entry<String, SubscriptionHandler> entry : subscriptionHandlers.entrySet()) {
-            if (TopicMatcher.matches(entry.getKey(), topic)) {
-                SubscriptionHandler handler = entry.getValue();
-                if (handler.handler != null) {
-                    handlerMono = handlerMono.then(handler.handler.apply(publishing));
-                }
-            }
-        }
+        // 委托给 SubscriptionManager 处理订阅匹配
+        Mono<Void> handlerMono = subscriptionManager.handleMessage(publishing);
 
         // 全局处理器
         if (config.publishingHandler != null) {
@@ -424,52 +419,69 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     private Mono<Void> resubscribeIfNeeded() {
-        if (!config.autoResubscribe() || subscriptionHandlers.isEmpty()) {
+        if (!config.autoResubscribe()) {
             return Mono.empty();
         }
 
-        return Flux.fromIterable(subscriptionHandlers.values())
-                   .flatMap(sub -> doSubscribe(sub.topic, sub.qos))
+        Iterable<SubscriptionManager.SubscriptionInfo> subscriptions = subscriptionManager.getSubscriptions();
+
+        // 检查是否有订阅
+        boolean hasSubscriptions = subscriptions.iterator().hasNext();
+        if (!hasSubscriptions) {
+            return Mono.empty();
+        }
+
+        return Flux.fromIterable(subscriptions)
+                   .flatMap(sub -> doSubscribe(sub.topic(), sub.qos()))
                    .then();
     }
 
     @Override
-    public Mono<Void> publish(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
+    public Mono<Void> publish(MqttPublishMessage message) {
         return Mono.defer(() -> {
             if (!hasFlag(CONNECTED)) {
                 return Mono.error(new IllegalStateException("Not connected"));
             }
+            MqttQoS qos = message.fixedHeader().qosLevel();
+            int originalMessageId = message.variableHeader().packetId();
 
-            int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : nextMessageId();
-
-            MqttPublishMessage publishMessage = MqttMessageBuilders.publish()
-                                                                   .topicName(topic)
-                                                                   .payload(payload != null ? payload : Unpooled.EMPTY_BUFFER)
-                                                                   .qos(qos)
-                                                                   .retained(retain)
-                                                                   .messageId(messageId)
-                                                                   .build();
+            // 如果消息 ID 为 0 且 QoS > 0，需要生成新的消息 ID
+            final int messageId;
+            final MqttPublishMessage finalMessage;
+            if (originalMessageId == 0 && qos != MqttQoS.AT_MOST_ONCE) {
+                messageId = nextMessageId();
+                finalMessage = MqttMessageBuilders.publish()
+                                                  .topicName(message.variableHeader().topicName())
+                                                  .payload(message.payload())
+                                                  .qos(qos)
+                                                  .retained(message.fixedHeader().isRetain())
+                                                  .messageId(messageId)
+                                                  .build();
+            } else {
+                messageId = originalMessageId;
+                finalMessage = message;
+            }
 
             if (qos == MqttQoS.AT_MOST_ONCE) {
-                return send(publishMessage);
+                return send(finalMessage);
             } else if (qos == MqttQoS.AT_LEAST_ONCE) {
                 Sinks.Empty<Void> sink = Sinks.empty();
                 pendingAcks.put(pendingKey(MqttMessageType.PUBACK, messageId), sink);
-                return send(publishMessage)
+                return send(finalMessage)
                         .then(sink.asMono())
-                        .timeout(Duration.ofSeconds(30))
+                        .timeout(config.publishTimeout)
                         .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.PUBACK, messageId)));
             } else {
                 // QoS 2
                 Sinks.Empty<Void> recSink = Sinks.empty();
                 pendingAcks.put(pendingKey(MqttMessageType.PUBREC, messageId), recSink);
-                return send(publishMessage)
+                return send(finalMessage)
                         .then(recSink.asMono())
                         .then(Mono.defer(() -> {
                             Sinks.Empty<Void> compSink = pendingAcks.get(pendingKey(MqttMessageType.PUBCOMP, messageId));
                             return compSink != null ? compSink.asMono() : Mono.empty();
                         }))
-                        .timeout(Duration.ofSeconds(30))
+                        .timeout(config.publishTimeout)
                         .doOnError(e -> {
                             pendingAcks.remove(pendingKey(MqttMessageType.PUBREC, messageId));
                             pendingAcks.remove(pendingKey(MqttMessageType.PUBCOMP, messageId));
@@ -479,22 +491,38 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     @Override
-    public Disposable subscribe(String topic, MqttQoS qos, Function<MqttClientPublishing, Mono<Void>> handler) {
-        SubscriptionHandler subHandler = new SubscriptionHandler(topic, qos, handler);
-        subscriptionHandlers.put(topic, subHandler);
+    public Mono<Void> publish(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
+        int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : nextMessageId();
 
-        Disposable.Composite composite = Disposables.composite();
+        MqttPublishMessage publishMessage = MqttMessageBuilders.publish()
+                                                               .topicName(topic)
+                                                               .payload(payload != null ? payload : Unpooled.EMPTY_BUFFER)
+                                                               .qos(qos)
+                                                               .retained(retain)
+                                                               .messageId(messageId)
+                                                               .build();
 
-        composite.add(doSubscribe(topic, qos).subscribe());
-        composite.add(() -> {
-            subscriptionHandlers.remove(topic);
-            unsubscribe(topic).subscribe();
-        });
-
-        return composite;
+        return publish(publishMessage);
     }
 
-    private Mono<Void> doSubscribe(String topic, MqttQoS qos) {
+    @Override
+    public Disposable subscribe(String topic, MqttQoS qos, Function<ClientReceivedPublish, Mono<Void>> handler) {
+        return subscriptionManager.subscribe(this, topic, qos, handler);
+    }
+
+    @Override
+    public Mono<Void> subscribe(String topic, MqttQoS qos) {
+        return doSubscribe(topic, qos);
+    }
+
+    /**
+     * 内部订阅方法,支持指定 QoS,供 SubscriptionManager 使用
+     *
+     * @param topic 订阅主题
+     * @param qos   QoS 级别
+     * @return 订阅完成的 Mono
+     */
+    Mono<Void> doSubscribe(String topic, MqttQoS qos) {
         int messageId = nextMessageId();
 
         MqttSubscribeMessage subscribeMessage = MqttMessageBuilders.subscribe()
@@ -507,7 +535,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         return send(subscribeMessage)
                 .then(sink.asMono())
-                .timeout(Duration.ofSeconds(10))
+                .timeout(config.subscribeTimeout)
                 .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId)));
     }
 
@@ -524,8 +552,6 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         for (String topic : topics) {
             subscribeBuilder.addSubscription(MqttQoS.AT_MOST_ONCE, topic);
-            // 记录订阅但不带处理器(仅用于重连)
-            subscriptionHandlers.putIfAbsent(topic, new SubscriptionHandler(topic, MqttQoS.AT_MOST_ONCE, null));
         }
 
         MqttSubscribeMessage subscribeMessage = subscribeBuilder.build();
@@ -535,7 +561,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         return send(subscribeMessage)
                 .then(sink.asMono())
-                .timeout(Duration.ofSeconds(10))
+                .timeout(config.subscribeTimeout)
                 .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId)));
     }
 
@@ -560,7 +586,6 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         for (String topic : topics) {
             unsubscribeBuilder.addTopicFilter(topic);
-            subscriptionHandlers.remove(topic);
         }
 
         MqttUnsubscribeMessage unsubscribeMessage = unsubscribeBuilder.build();
@@ -570,7 +595,7 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
 
         return send(unsubscribeMessage)
                 .then(sink.asMono())
-                .timeout(Duration.ofSeconds(10))
+                .timeout(config.unsubscribeTimeout)
                 .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.UNSUBACK, messageId)));
     }
 
@@ -583,12 +608,12 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     @Override
-    public Flux<MqttClientPublishing> receive() {
+    public Flux<ClientReceivedPublish> receive() {
         return messageSink.asFlux();
     }
 
     @Override
-    public boolean isConnected() {
+    public boolean isAlive() {
         return hasFlag(CONNECTED) && connection != null && connection.channel().isActive();
     }
 
@@ -715,21 +740,6 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
     }
 
     /**
-     * 订阅处理器,同时用于重连后自动重新订阅
-     */
-    private static class SubscriptionHandler {
-        final String topic;
-        final MqttQoS qos;
-        final Function<MqttClientPublishing, Mono<Void>> handler;
-
-        SubscriptionHandler(String topic, MqttQoS qos, Function<MqttClientPublishing, Mono<Void>> handler) {
-            this.topic = topic;
-            this.qos = qos;
-            this.handler = handler;
-        }
-    }
-
-    /**
      * 连接配置(不可变)
      */
     private static class ConnectionConfig {
@@ -743,17 +753,21 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
         final short keepAliveSeconds;
         final byte protocolVersion;
         final byte flags;
-        final WillMessage willMessage;
+        final MqttWillMessage willMessage;
         final MqttQoS qos;
-        final Function<MqttClientPublishing, Mono<Void>> publishingHandler;
+        final Function<ClientReceivedPublish, Mono<Void>> publishingHandler;
         final ReconnectStrategy reconnectStrategy;
+        final Duration subscribeTimeout;
+        final Duration unsubscribeTimeout;
+        final Duration publishTimeout;
 
         ConnectionConfig(String clientId, String username, byte[] password,
                          short keepAliveSeconds, boolean cleanSession, byte protocolVersion,
-                         WillMessage willMessage,
-                         Function<MqttClientPublishing, Mono<Void>> publishingHandler,
+                         MqttWillMessage willMessage,
+                         Function<ClientReceivedPublish, Mono<Void>> publishingHandler,
                          boolean autoAck, MqttQoS qos,
-                         ReconnectStrategy reconnectStrategy, boolean autoResubscribe) {
+                         ReconnectStrategy reconnectStrategy, boolean autoResubscribe,
+                         Duration subscribeTimeout, Duration unsubscribeTimeout, Duration publishTimeout) {
             this.clientId = clientId;
             this.username = username;
             this.password = password;
@@ -766,6 +780,9 @@ public class DefaultMqttClientConnection implements MqttClientConnection {
             this.qos = qos;
             this.publishingHandler = publishingHandler;
             this.reconnectStrategy = reconnectStrategy;
+            this.subscribeTimeout = subscribeTimeout;
+            this.unsubscribeTimeout = unsubscribeTimeout;
+            this.publishTimeout = publishTimeout;
         }
 
         boolean cleanSession() {

@@ -18,7 +18,7 @@ package org.jetlinks.reactor.mqtt.server;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.client.MqttClient;
-import org.jetlinks.reactor.mqtt.client.MqttClientConnection;
+import org.jetlinks.reactor.mqtt.client.ClientConnection;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
@@ -30,7 +30,6 @@ import reactor.test.StepVerifier;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -46,7 +45,7 @@ class MqttAutoAckTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(5);
 
     private DisposableServer server;
-    private MqttClientConnection clientConnection;
+    private ClientConnection clientConnection;
 
     @AfterEach
     void tearDown() {
@@ -74,7 +73,7 @@ class MqttAutoAckTest {
                               // 默认 autoAck = true
                               .listener(new MqttMessageListener() {
                                   @Override
-                                  public Mono<Void> onPublish(MqttPublishing message) {
+                                  public Mono<Void> onPublish(ServerReceivedPublish message) {
                                       payloadSink.tryEmitValue(message.getPayload().toString(StandardCharsets.UTF_8));
                                       // 不调用 acknowledge()，依赖自动应答
                                       return Mono.empty();
@@ -91,7 +90,7 @@ class MqttAutoAckTest {
                                   }
 
                                   @Override
-                                  public Mono<Void> onDisconnect(MqttConnection connection) {
+                                  public Mono<Void> onDisconnect(ServerConnection connection) {
                                       return Mono.empty();
                                   }
                               }).accept())
@@ -132,7 +131,7 @@ class MqttAutoAckTest {
                               .autoAck(true)  // 显式设置自动应答
                               .listener(new MqttMessageListener() {
                                   @Override
-                                  public Mono<Void> onPublish(MqttPublishing message) {
+                                  public Mono<Void> onPublish(ServerReceivedPublish message) {
                                       int count = messageCount.incrementAndGet();
                                       if (count >= 3) {
                                           completeSink.tryEmitValue(count);
@@ -151,7 +150,7 @@ class MqttAutoAckTest {
                                   }
 
                                   @Override
-                                  public Mono<Void> onDisconnect(MqttConnection connection) {
+                                  public Mono<Void> onDisconnect(ServerConnection connection) {
                                       return Mono.empty();
                                   }
                               }).accept())
@@ -193,7 +192,7 @@ class MqttAutoAckTest {
                               .autoAck(false)  // 手动应答模式
                               .listener(new MqttMessageListener() {
                                   @Override
-                                  public Mono<Void> onPublish(MqttPublishing message) {
+                                  public Mono<Void> onPublish(ServerReceivedPublish message) {
                                       payloadSink.tryEmitValue(message.getPayload().toString(StandardCharsets.UTF_8));
                                       // 手动应答：模拟处理后再确认
                                       return Mono.delay(Duration.ofMillis(100))
@@ -211,7 +210,7 @@ class MqttAutoAckTest {
                                   }
 
                                   @Override
-                                  public Mono<Void> onDisconnect(MqttConnection connection) {
+                                  public Mono<Void> onDisconnect(ServerConnection connection) {
                                       return Mono.empty();
                                   }
                               }).accept())
@@ -252,7 +251,7 @@ class MqttAutoAckTest {
                               .autoAck(false)
                               .listener(new MqttMessageListener() {
                                   @Override
-                                  public Mono<Void> onPublish(MqttPublishing message) {
+                                  public Mono<Void> onPublish(ServerReceivedPublish message) {
                                       payloadSink.tryEmitValue(message.getPayload().toString(StandardCharsets.UTF_8));
                                       qosSink.tryEmitValue(message.getQosLevel());
                                       // 手动应答 QoS2
@@ -270,7 +269,7 @@ class MqttAutoAckTest {
                                   }
 
                                   @Override
-                                  public Mono<Void> onDisconnect(MqttConnection connection) {
+                                  public Mono<Void> onDisconnect(ServerConnection connection) {
                                       return Mono.empty();
                                   }
                               }).accept())
@@ -314,7 +313,7 @@ class MqttAutoAckTest {
                               .autoAck(false)  // 即使设置手动应答，QoS0 也不需要
                               .listener(new MqttMessageListener() {
                                   @Override
-                                  public Mono<Void> onPublish(MqttPublishing message) {
+                                  public Mono<Void> onPublish(ServerReceivedPublish message) {
                                       int count = messageCount.incrementAndGet();
                                       if (count >= 2) {
                                           completeSink.tryEmitValue(count);
@@ -334,7 +333,7 @@ class MqttAutoAckTest {
                                   }
 
                                   @Override
-                                  public Mono<Void> onDisconnect(MqttConnection connection) {
+                                  public Mono<Void> onDisconnect(ServerConnection connection) {
                                       return Mono.empty();
                                   }
                               }).accept())
@@ -377,7 +376,7 @@ class MqttAutoAckTest {
                               .autoAck(false)
                               .listener(new MqttMessageListener() {
                                   @Override
-                                  public Mono<Void> onPublish(MqttPublishing message) {
+                                  public Mono<Void> onPublish(ServerReceivedPublish message) {
                                       int count = messageCount.incrementAndGet();
                                       if (count >= expectedCount) {
                                           completeSink.tryEmitValue(count);
@@ -397,7 +396,7 @@ class MqttAutoAckTest {
                                   }
 
                                   @Override
-                                  public Mono<Void> onDisconnect(MqttConnection connection) {
+                                  public Mono<Void> onDisconnect(ServerConnection connection) {
                                       return Mono.empty();
                                   }
                               }).accept())

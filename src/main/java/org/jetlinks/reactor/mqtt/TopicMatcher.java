@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jetlinks.reactor.mqtt.client;
+package org.jetlinks.reactor.mqtt;
 
 /**
  * MQTT 主题匹配工具类（零分配实现）

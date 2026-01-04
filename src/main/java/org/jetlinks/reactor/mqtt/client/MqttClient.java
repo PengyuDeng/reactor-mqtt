@@ -23,6 +23,7 @@ import io.netty.handler.codec.mqtt.MqttEncoder;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import io.netty.handler.codec.mqtt.MqttVersion;
 import io.netty.handler.ssl.SslContext;
+import org.jetlinks.reactor.mqtt.MqttWillMessage;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.netty.resources.LoopResources;
@@ -120,7 +121,7 @@ public class MqttClient {
     /**
      * 遗言消息
      */
-    private WillMessage willMessage;
+    private MqttWillMessage willMessage;
 
     /**
      * SSL 上下文,用于加密连接,为 null 时使用明文连接
@@ -140,7 +141,7 @@ public class MqttClient {
     /**
      * 全局消息发布处理器,接收所有订阅的消息
      */
-    private Function<MqttClientPublishing, Mono<Void>> publishingHandler;
+    private Function<ClientReceivedPublish, Mono<Void>> publishingHandler;
 
     /**
      * 是否自动确认 QoS 1/2 消息,默认 true
@@ -166,6 +167,21 @@ public class MqttClient {
      * TCP 连接超时时间,默认 10 秒
      */
     private Duration connectTimeout = Duration.ofSeconds(10);
+
+    /**
+     * 订阅操作超时时间,默认 10 秒
+     */
+    private Duration subscribeTimeout = Duration.ofSeconds(10);
+
+    /**
+     * 取消订阅操作超时时间,默认 10 秒
+     */
+    private Duration unsubscribeTimeout = Duration.ofSeconds(10);
+
+    /**
+     * 发布操作超时时间,默认 30 秒
+     */
+    private Duration publishTimeout = Duration.ofSeconds(30);
 
     private MqttClient() {
     }
@@ -245,7 +261,7 @@ public class MqttClient {
      * 设置遗言消息
      */
     public MqttClient will(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
-        this.willMessage = new WillMessage(topic, payload, qos, retain);
+        this.willMessage = new MqttWillMessage(topic, payload, qos, retain);
         return this;
     }
 
@@ -253,7 +269,7 @@ public class MqttClient {
         return will(topic, payload != null ? Unpooled.wrappedBuffer(payload) : null, qos, retain);
     }
 
-    public MqttClient will(WillMessage willMessage) {
+    public MqttClient will(MqttWillMessage willMessage) {
         this.willMessage = willMessage;
         return this;
     }
@@ -295,7 +311,7 @@ public class MqttClient {
     /**
      * 设置全局消息处理器
      */
-    public MqttClient handlePublishing(Function<MqttClientPublishing, Mono<Void>> handler) {
+    public MqttClient handlePublishing(Function<ClientReceivedPublish, Mono<Void>> handler) {
         this.publishingHandler = handler;
         return this;
     }
@@ -339,16 +355,29 @@ public class MqttClient {
         return this;
     }
 
+    public MqttClient subscribeTimeout(Duration timeout) {
+        this.subscribeTimeout = timeout;
+        return this;
+    }
+
+    public MqttClient unsubscribeTimeout(Duration timeout) {
+        this.unsubscribeTimeout = timeout;
+        return this;
+    }
+
+    public MqttClient publishTimeout(Duration timeout) {
+        this.publishTimeout = timeout;
+        return this;
+    }
+
     /**
      * 异步连接
      *
      * @return 连接完成后返回 MqttClientConnection
      */
-    public Mono<MqttClientConnection> connect() {
+    public Mono<ClientConnection> connect() {
         String actualClientId = clientId != null ? clientId :
                 "reactor-mqtt-" + UUID.randomUUID().toString().substring(0, 8);
-
-        Sinks.One<MqttClientConnection> connectionSink = Sinks.one();
 
         TcpClient tcpClient = TcpClient.create()
                                        .host(host)
@@ -372,7 +401,7 @@ public class MqttClient {
 
         return tcpClient.connect()
                         .flatMap(conn -> {
-                            DefaultMqttClientConnection mqttConn = new DefaultMqttClientConnection(
+                            DefaultClientConnection mqttConn = new DefaultClientConnection(
                                     conn,
                                     actualClientId,
                                     username,
@@ -386,7 +415,10 @@ public class MqttClient {
                                     qos,
                                     reconnectStrategy,
                                     autoResubscribe,
-                                    tcpClientSupplier
+                                    tcpClientSupplier,
+                                    subscribeTimeout,
+                                    unsubscribeTimeout,
+                                    publishTimeout
                             );
                             return mqttConn.initialize();
                         });
@@ -398,7 +430,7 @@ public class MqttClient {
      * @return 连接对象
      * @throws RuntimeException 如果连接超时或失败
      */
-    public MqttClientConnection connectNow() {
+    public ClientConnection connectNow() {
         return connect()
                 .timeout(connectTimeout.plusSeconds(5))
                 .block();
@@ -411,7 +443,7 @@ public class MqttClient {
      * @return 连接对象
      * @throws RuntimeException 如果连接超时或失败
      */
-    public MqttClientConnection connectNow(Duration timeout) {
+    public ClientConnection connectNow(Duration timeout) {
         return connect()
                 .timeout(timeout)
                 .block();

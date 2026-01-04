@@ -72,13 +72,13 @@ class MqttServerStressTest {
                          .handle(connection -> {
                              connectedClients.incrementAndGet();
 
-                             connection.onDispose()
+                             connection.onClose()
                                        .doOnSuccess(v -> connectedClients.decrementAndGet())
                                        .subscribe();
 
                              return connection.listener(new MqttMessageListener() {
                                  @Override
-                                 public Mono<Void> onPublish(MqttPublishing message) {
+                                 public Mono<Void> onPublish(ServerReceivedPublish message) {
                                      receivedMessages.incrementAndGet();
                                      return Mono.empty();
                                  }
@@ -94,7 +94,7 @@ class MqttServerStressTest {
                                  }
 
                                  @Override
-                                 public Mono<Void> onDisconnect(MqttConnection conn) {
+                                 public Mono<Void> onDisconnect(ServerConnection conn) {
                                      return Mono.empty();
                                  }
                              }).accept();

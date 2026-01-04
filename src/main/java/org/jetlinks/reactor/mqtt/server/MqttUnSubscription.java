@@ -16,23 +16,18 @@
 package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.codec.mqtt.MqttUnsubscribeMessage;
-import org.reactivestreams.Publisher;
-import reactor.core.publisher.Mono;
+import org.jetlinks.reactor.mqtt.Acknowledge;
 
 /**
  * MQTT 取消订阅请求
  *
  * @author PengyuDeng
  */
-public interface MqttUnsubscription {
+public interface MqttUnsubscription extends Acknowledge {
 
     /**
      * 获取原始取消订阅消息
      */
     MqttUnsubscribeMessage getMessage();
 
-    /**
-     * 确认取消订阅（发送 UNSUBACK）
-     */
-    Publisher<Void> acknowledge();
 }

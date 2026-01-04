@@ -23,6 +23,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.function.Function;
 
 /**
@@ -95,53 +96,29 @@ public interface ClientConnection extends MqttConnection {
      */
     Mono<Void> publish(String topic, ByteBuf payload, MqttQoS qos, boolean retain);
 
+    default Disposable subscribe(String topic, Function<ClientReceivedPublish, Mono<Void>> handler) {
+        return subscribe(topic, getQos(), handler);
+    }
+
+    default Disposable subscribe(Collection<String> topic, Function<ClientReceivedPublish, Mono<Void>> handler) {
+        return subscribe(topic, getQos(), handler);
+    }
+
+    default Disposable subscribe(String topic, MqttQoS qos, Function<ClientReceivedPublish, Mono<Void>> handler) {
+        return subscribe(List.of(topic), qos, handler);
+    }
+
     /**
      * 订阅主题并处理消息（使用默认 QoS）
      *
      * <p>返回 Disposable，调用 dispose() 取消订阅。</p>
      *
      * @param topic   主题（支持通配符 + 和 #）
+     * @param qos     qos
      * @param handler 消息处理器
      * @return Disposable 用于取消订阅
      */
-    default Disposable subscribe(String topic, Function<ClientReceivedPublish, Mono<Void>> handler) {
-        return subscribe(topic, getQos(), handler);
-    }
-
-    /**
-     * 订阅主题并处理消息
-     *
-     * @param topic   主题
-     * @param qos     最大 QoS 级别
-     * @param handler 消息处理器
-     * @return Disposable 用于取消订阅
-     */
-    Disposable subscribe(String topic, MqttQoS qos, Function<ClientReceivedPublish, Mono<Void>> handler);
-
-    /**
-     * 订阅单个主题（不带处理器）
-     *
-     * @param topic 主题
-     * @param qos   最大 QoS 级别
-     * @return 订阅完成的 Mono
-     */
-    Mono<Void> subscribe(String topic, MqttQoS qos);
-
-    /**
-     * 订阅多个主题
-     *
-     * @param topics 主题列表
-     * @return 订阅完成的 Mono
-     */
-    Mono<Void> subscribe(String... topics);
-
-    /**
-     * 订阅多个主题
-     *
-     * @param topics 主题集合
-     * @return 订阅完成的 Mono
-     */
-    Mono<Void> subscribe(Collection<String> topics);
+    Disposable subscribe(Collection<String> topic, MqttQoS qos, Function<ClientReceivedPublish, Mono<Void>> handler);
 
     /**
      * 取消订阅
@@ -159,14 +136,6 @@ public interface ClientConnection extends MqttConnection {
      */
     Mono<Void> unsubscribe(Collection<String> topics);
 
-    /**
-     * 获取所有消息的 Flux 流
-     *
-     * <p>高级 API，用于自定义消息处理流程。</p>
-     *
-     * @return 消息流
-     */
-    Flux<ClientReceivedPublish> receive();
 
     /**
      * 连接是否存活

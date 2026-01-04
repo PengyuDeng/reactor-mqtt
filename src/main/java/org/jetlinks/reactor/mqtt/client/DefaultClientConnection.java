@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -135,7 +136,7 @@ public class DefaultClientConnection implements ClientConnection {
                                    boolean cleanSession,
                                    byte protocolVersion,
                                    MqttWillMessage willMessage,
-                                   Function<ClientReceivedPublish, Mono<Void>> publishingHandler,
+                                   Consumer<ClientReceivedPublish> publishingHandler,
                                    boolean autoAck,
                                    MqttQoS qos,
                                    ReconnectStrategy reconnectStrategy,
@@ -286,7 +287,7 @@ public class DefaultClientConnection implements ClientConnection {
 
         // 全局处理器
         if (config.publishingHandler != null) {
-            handlerMono = handlerMono.then(config.publishingHandler.apply(publishing));
+            handlerMono = handlerMono.then(Mono.fromRunnable(() -> config.publishingHandler.accept(publishing)));
         }
 
         // 自动确认
@@ -511,9 +512,10 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     @Override
-    public Mono<Void> subscribe(String topic, MqttQoS qos) {
-        return doSubscribe(topic, qos);
+    public Disposable subscribe(Collection<String> topic, MqttQoS qos, Function<ClientReceivedPublish, Mono<Void>> handler) {
+        return subscriptionManager.subscribe(this, topic, qos, handler);
     }
+
 
     /**
      * 内部订阅方法,支持指定 QoS,供 SubscriptionManager 使用
@@ -539,39 +541,6 @@ public class DefaultClientConnection implements ClientConnection {
                 .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId)));
     }
 
-    @Override
-    public Mono<Void> subscribe(String... topics) {
-        if (topics == null || topics.length == 0) {
-            return Mono.empty();
-        }
-
-        int messageId = nextMessageId();
-
-        MqttMessageBuilders.SubscribeBuilder subscribeBuilder = MqttMessageBuilders.subscribe()
-                                                                                   .messageId(messageId);
-
-        for (String topic : topics) {
-            subscribeBuilder.addSubscription(MqttQoS.AT_MOST_ONCE, topic);
-        }
-
-        MqttSubscribeMessage subscribeMessage = subscribeBuilder.build();
-
-        Sinks.Empty<Void> sink = Sinks.empty();
-        pendingAcks.put(pendingKey(MqttMessageType.SUBACK, messageId), sink);
-
-        return send(subscribeMessage)
-                .then(sink.asMono())
-                .timeout(config.subscribeTimeout)
-                .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId)));
-    }
-
-    @Override
-    public Mono<Void> subscribe(Collection<String> topics) {
-        if (topics == null || topics.isEmpty()) {
-            return Mono.empty();
-        }
-        return subscribe(topics.toArray(new String[0]));
-    }
 
     @Override
     public Mono<Void> unsubscribe(String... topics) {
@@ -755,7 +724,7 @@ public class DefaultClientConnection implements ClientConnection {
         final byte flags;
         final MqttWillMessage willMessage;
         final MqttQoS qos;
-        final Function<ClientReceivedPublish, Mono<Void>> publishingHandler;
+        final Consumer<ClientReceivedPublish> publishingHandler;
         final ReconnectStrategy reconnectStrategy;
         final Duration subscribeTimeout;
         final Duration unsubscribeTimeout;
@@ -764,7 +733,7 @@ public class DefaultClientConnection implements ClientConnection {
         ConnectionConfig(String clientId, String username, byte[] password,
                          short keepAliveSeconds, boolean cleanSession, byte protocolVersion,
                          MqttWillMessage willMessage,
-                         Function<ClientReceivedPublish, Mono<Void>> publishingHandler,
+                         Consumer<ClientReceivedPublish> publishingHandler,
                          boolean autoAck, MqttQoS qos,
                          ReconnectStrategy reconnectStrategy, boolean autoResubscribe,
                          Duration subscribeTimeout, Duration unsubscribeTimeout, Duration publishTimeout) {

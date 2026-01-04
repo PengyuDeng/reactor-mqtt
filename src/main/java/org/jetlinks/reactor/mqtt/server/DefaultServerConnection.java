@@ -33,6 +33,7 @@ import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -78,7 +79,9 @@ public class DefaultServerConnection implements ServerConnection {
     private final Sinks.One<MqttConnectMessage> connectSink = Sinks.one();
     private final Sinks.Empty<Void> disposeSink = Sinks.empty();
 
-    private volatile MqttMessageListener messageListener;
+    private volatile Consumer<ServerReceivedPublish> publishHandler;
+    private volatile Consumer<MqttSubscription> subscribeHandler;
+    private volatile Consumer<MqttUnsubscription> unsubscribeHandler;
     private volatile boolean autoAck = true;
 
     private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
@@ -93,9 +96,6 @@ public class DefaultServerConnection implements ServerConnection {
 
         connection.onDispose(() -> {
             if (casSetClosed()) {
-                if (messageListener != null) {
-                    messageListener.onDisconnect(this).subscribe();
-                }
                 emitEmpty(disposeSink);
             }
         });
@@ -208,7 +208,7 @@ public class DefaultServerConnection implements ServerConnection {
     }
 
     private Mono<Void> handlePublishSync(MqttPublishMessage msg) {
-        if (messageListener == null) {
+        if (publishHandler == null) {
             ReferenceCountUtil.release(msg);
             return Mono.empty();
         }
@@ -223,8 +223,9 @@ public class DefaultServerConnection implements ServerConnection {
 
         DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, clientId, this::send);
 
+        Mono<Void> handler = Mono.fromRunnable(() -> publishHandler.accept(publishing));
+
         if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
-            Mono<Void> handler = messageListener.onPublish(publishing);
             if (autoAck) {
                 return handler.then(publishing.acknowledge())
                               .doFinally(signal -> publishing.release());
@@ -232,16 +233,15 @@ public class DefaultServerConnection implements ServerConnection {
                 return handler.doFinally(signal -> publishing.release());
             }
         }
-        return messageListener.onPublish(publishing)
-                              .doFinally(signal -> publishing.release());
+        return handler.doFinally(signal -> publishing.release());
     }
 
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {
         DefaultMqttSubscription sub = new DefaultMqttSubscription(msg, this);
 
-        if (messageListener != null) {
-            return messageListener.onSubscribe(sub)
-                                  .then(Mono.defer(() -> Mono.from(sub.acknowledge())));
+        if (subscribeHandler != null) {
+            return Mono.fromRunnable(() -> subscribeHandler.accept(sub))
+                       .then(Mono.defer(() -> Mono.from(sub.acknowledge())));
         }
 
         return Mono.from(sub.acknowledge());
@@ -250,9 +250,9 @@ public class DefaultServerConnection implements ServerConnection {
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
         DefaultMqttUnsubscription unsub = new DefaultMqttUnsubscription(msg, this);
 
-        if (messageListener != null) {
-            return messageListener.onUnsubscribe(unsub)
-                                  .then(Mono.defer(() -> Mono.from(unsub.acknowledge())));
+        if (unsubscribeHandler != null) {
+            return Mono.fromRunnable(() -> unsubscribeHandler.accept(unsub))
+                       .then(Mono.defer(() -> Mono.from(unsub.acknowledge())));
         }
 
         return Mono.from(unsub.acknowledge());
@@ -356,8 +356,20 @@ public class DefaultServerConnection implements ServerConnection {
     }
 
     @Override
-    public ServerConnection listener(MqttMessageListener listener) {
-        this.messageListener = listener;
+    public ServerConnection handlePublishing(Consumer<ServerReceivedPublish> message) {
+        this.publishHandler = message;
+        return this;
+    }
+
+    @Override
+    public ServerConnection onSubscribe(Consumer<MqttSubscription> subscription) {
+        this.subscribeHandler = subscription;
+        return this;
+    }
+
+    @Override
+    public ServerConnection onUnsubscribe(Consumer<MqttUnsubscription> unsubscription) {
+        this.unsubscribeHandler = unsubscription;
         return this;
     }
 
@@ -430,9 +442,6 @@ public class DefaultServerConnection implements ServerConnection {
                 return Mono.empty();
             }
             return Mono.fromRunnable(() -> {
-                if (messageListener != null) {
-                    messageListener.onDisconnect(this).subscribe();
-                }
                 emitEmpty(disposeSink);
                 connection.dispose();
             });

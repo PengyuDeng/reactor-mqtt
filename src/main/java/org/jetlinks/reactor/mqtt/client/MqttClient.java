@@ -31,6 +31,7 @@ import reactor.netty.tcp.TcpClient;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -141,7 +142,7 @@ public class MqttClient {
     /**
      * 全局消息发布处理器,接收所有订阅的消息
      */
-    private Function<ClientReceivedPublish, Mono<Void>> publishingHandler;
+    private Consumer<ClientReceivedPublish>  publishingHandler;
 
     /**
      * 是否自动确认 QoS 1/2 消息,默认 true
@@ -311,7 +312,7 @@ public class MqttClient {
     /**
      * 设置全局消息处理器
      */
-    public MqttClient handlePublishing(Function<ClientReceivedPublish, Mono<Void>> handler) {
+    public MqttClient handlePublishing(Consumer<ClientReceivedPublish> handler) {
         this.publishingHandler = handler;
         return this;
     }

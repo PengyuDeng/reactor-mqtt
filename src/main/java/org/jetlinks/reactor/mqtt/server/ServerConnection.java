@@ -22,6 +22,7 @@ import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.function.Consumer;
 
 /**
  * MQTT 服务端连接接口 - 纯响应式 API
@@ -75,27 +76,38 @@ public interface ServerConnection extends MqttConnection {
     MqttWillMessage getWill();
 
     /**
-     * 设置响应式消息监听器
-     * <p>
-     * 使用统一的监听器接口处理所有 MQTT 消息事件。
-     * 这是推荐的消息处理方式，所有回调都返回 {@link Mono}。
-     * </p>
+     * 处理客户端发布的消息
      *
-     * <pre>{@code
-     * connection.listener(new MqttMessageListener() {
-     *     @Override
-     *     public Mono<Void> onPublish(MqttPublishing message) {
-     *         return processMessage(message)
-     *             .then(message.acknowledge());
-     *     }
-     * });
-     * }</pre>
+     * <p>当客户端发布消息到服务器时调用此方法。
+     * 对于 QoS 1/2 消息，ACK 会在此方法返回的 Mono 完成后自动发送。</p>
      *
-     * @param listener 消息监听器
-     * @return 当前连接实例（支持链式调用）
-     * @see MqttMessageListener
+     * @param message 发布的消息
+     * @return this
      */
-    ServerConnection listener(MqttMessageListener listener);
+    ServerConnection handlePublishing(Consumer<ServerReceivedPublish> message);
+
+    /**
+     * 处理客户端的订阅请求
+     *
+     * <p>当客户端发送订阅请求时调用此方法。
+     * SUBACK 会在此方法返回的 Mono 完成后自动发送。</p>
+     *
+     * @param subscription 订阅请求
+     * @return this
+     */
+    ServerConnection onSubscribe(Consumer<MqttSubscription> subscription);
+
+    /**
+     * 处理客户端的取消订阅请求
+     *
+     * <p>当客户端发送取消订阅请求时调用此方法。
+     * UNSUBACK 会在此方法返回的 Mono 完成后自动发送。</p>
+     *
+     * @param unsubscription 取消订阅请求
+     * @return @{code}code this
+     */
+    ServerConnection onUnsubscribe(Consumer<MqttUnsubscription> unsubscription);
+
 
     /**
      * 设置是否自动应答 QoS > 0 的消息

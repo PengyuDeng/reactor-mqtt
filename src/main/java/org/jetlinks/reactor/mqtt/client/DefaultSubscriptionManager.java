@@ -22,8 +22,10 @@ import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -95,8 +97,7 @@ public class DefaultSubscriptionManager implements SubscriptionManager {
         private final String topic;
         private final MqttQoS qos;
         private final ClientConnection connection;
-        private final java.util.List<Function<ClientReceivedPublish, Mono<Void>>> handlers =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final List<Function<ClientReceivedPublish, Mono<Void>>> handlers = new CopyOnWriteArrayList<>();
         private volatile boolean subscribed = false;
         private final Object subscribeLock = new Object();
 
@@ -117,23 +118,23 @@ public class DefaultSubscriptionManager implements SubscriptionManager {
 
             // 第一个处理器时执行实际订阅
             if (!subscribed) {
-                synchronized (subscribeLock) {
-                    if (!subscribed) {
-                        connection.subscribe(topic, qos).subscribe(
-                                v -> {
-                                },
-                                error -> {
-                                    // 只记录非超时错误，连接关闭时的超时是正常的
-                                    if (!(error instanceof java.util.concurrent.TimeoutException)) {
-                                        log.log(Level.WARNING,
-                                               "Failed to subscribe to topic: " + topic,
-                                               error);
-                                    }
-                                }
-                        );
-                        subscribed = true;
-                    }
-                }
+//                synchronized (subscribeLock) {
+//                    if (!subscribed) {
+//                        connection.subscribe(topic, qos).subscribe(
+//                                v -> {
+//                                },
+//                                error -> {
+//                                    // 只记录非超时错误，连接关闭时的超时是正常的
+//                                    if (!(error instanceof java.util.concurrent.TimeoutException)) {
+//                                        log.log(Level.WARNING,
+//                                                "Failed to subscribe to topic: " + topic,
+//                                                error);
+//                                    }
+//                                }
+//                        );
+//                        subscribed = true;
+//                    }
+//                }
             }
 
             // 返回 Disposable 用于移除此处理器
@@ -154,13 +155,13 @@ public class DefaultSubscriptionManager implements SubscriptionManager {
         Mono<Void> handle(ClientReceivedPublish publishing) {
             return Flux.fromIterable(handlers)
                        .flatMap(h -> h.apply(publishing)
-                                     .onErrorResume(error -> {
-                                         log.log(Level.WARNING,
-                                                String.format("Handler error for topic [%s]: %s",
-                                                            topic, error.getMessage()),
-                                                error);
-                                         return Mono.empty();
-                                     }))
+                                      .onErrorResume(error -> {
+                                          log.log(Level.WARNING,
+                                                  String.format("Handler error for topic [%s]: %s",
+                                                                topic, error.getMessage()),
+                                                  error);
+                                          return Mono.empty();
+                                      }))
                        .then();
         }
 
@@ -176,8 +177,8 @@ public class DefaultSubscriptionManager implements SubscriptionManager {
                             // 只记录非超时错误，连接关闭时的超时是正常的
                             if (!(error instanceof java.util.concurrent.TimeoutException)) {
                                 log.log(Level.WARNING,
-                                       "Failed to unsubscribe from topic: " + topic,
-                                       error);
+                                        "Failed to unsubscribe from topic: " + topic,
+                                        error);
                             }
                         }
                 );

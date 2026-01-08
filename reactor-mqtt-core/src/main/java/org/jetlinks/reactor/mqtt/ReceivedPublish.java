@@ -18,7 +18,6 @@ package org.jetlinks.reactor.mqtt;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttProperties;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
-import reactor.core.publisher.Mono;
 
 /**
  * MQTT 收到的 PUBLISH 消息

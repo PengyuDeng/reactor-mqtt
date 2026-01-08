@@ -92,24 +92,4 @@ public interface SubscriptionManager {
          */
         MqttQoS qos();
     }
-
-    /**
-     * 创建默认的订阅管理器
-     *
-     * @return 订阅管理器实例
-     */
-    static SubscriptionManager create() {
-        return new DefaultSubscriptionManager();
-    }
-
-    /**
-     * 创建基于 Trie 树的高性能订阅管理器
-     *
-     * <p>适合大量订阅的场景，提供 O(L) 的查找复杂度（L 为主题层级数）。</p>
-     *
-     * @return 订阅管理器实例
-     */
-    static SubscriptionManager createTrieBased() {
-        return new TrieBasedSubscriptionManager();
-    }
 }

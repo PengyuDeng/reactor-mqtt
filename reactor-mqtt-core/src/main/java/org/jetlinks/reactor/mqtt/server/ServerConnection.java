@@ -16,6 +16,7 @@
 package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.codec.mqtt.MqttConnectReturnCode;
+import org.jetlinks.reactor.mqtt.MqttAuth;
 import org.jetlinks.reactor.mqtt.MqttConnection;
 import org.jetlinks.reactor.mqtt.MqttWillMessage;
 import reactor.core.publisher.Mono;

@@ -1,6 +1,5 @@
 package org.jetlinks.reactor.mqtt;
 
-import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 
 public interface Acknowledge {

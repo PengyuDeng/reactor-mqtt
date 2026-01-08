@@ -7,7 +7,11 @@
     <groupId>org.jetlinks.community</groupId>
     <artifactId>reactor-mqtt</artifactId>
     <version>1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
     <description>Reactor-based MQTT Server implementation</description>
+    <modules>
+        <module>reactor-mqtt-core</module>
+    </modules>
 
     <properties>
         <java.version>17</java.version>

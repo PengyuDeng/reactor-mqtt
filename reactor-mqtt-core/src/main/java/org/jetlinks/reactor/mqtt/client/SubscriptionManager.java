@@ -31,6 +31,24 @@ import java.util.function.Function;
 public interface SubscriptionManager {
 
     /**
+     * 创建默认的订阅管理器
+     *
+     * @return 订阅管理器实例
+     */
+    static SubscriptionManager create() {
+        return new DefaultSubscriptionManager();
+    }
+
+    /**
+     * 创建基于Trie树的高性能订阅管理器
+     *
+     * @return 订阅管理器实例
+     */
+    static SubscriptionManager createTrieBased() {
+        return new TrieBasedSubscriptionManager();
+    }
+
+    /**
      * 订阅主题
      *
      * @param connection 客户端连接

@@ -1,8 +1,11 @@
 package org.jetlinks.reactor.mqtt.server;
 
+import io.netty.handler.ssl.SslContext;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
+import reactor.netty.resources.LoopResources;
 
+import java.time.Duration;
 import java.util.function.Function;
 
 /**
@@ -21,8 +24,7 @@ public interface MqttServer {
      * @return 服务器构建器
      */
     static MqttServer create() {
-        // TODO
-        return null;
+        return new DefaultMqttServer();
     }
 
     /**
@@ -42,9 +44,82 @@ public interface MqttServer {
     MqttServer port(int port);
 
     /**
+     * 设置最大消息大小
+     *
+     * @param maxMessageSize 最大消息大小（字节）
+     * @return 当前实例
+     */
+    MqttServer maxMessageSize(int maxMessageSize);
+
+    /**
+     * 设置空闲超时时间
+     *
+     * @param idleTimeout 空闲超时时间
+     * @return 当前实例
+     */
+    MqttServer idleTimeout(Duration idleTimeout);
+
+    /**
+     * 设置 SSL 上下文
+     *
+     * @param sslContext SSL 上下文
+     * @return 当前实例
+     */
+    MqttServer ssl(SslContext sslContext);
+
+    /**
+     * 设置事件循环资源
+     *
+     * @param loopResources 事件循环资源
+     * @return 当前实例
+     */
+    MqttServer loopResources(LoopResources loopResources);
+
+    /**
+     * 设置工作线程数
+     *
+     * @param workerCount 工作线程数
+     * @return 当前实例
+     */
+    MqttServer workerCount(int workerCount);
+
+    /**
+     * 设置 TCP_NODELAY 选项
+     *
+     * @param tcpNoDelay true 启用，false 禁用
+     * @return 当前实例
+     */
+    MqttServer tcpNoDelay(boolean tcpNoDelay);
+
+    /**
+     * 设置 SO_KEEPALIVE 选项
+     *
+     * @param tcpKeepAlive true 启用，false 禁用
+     * @return 当前实例
+     */
+    MqttServer tcpKeepAlive(boolean tcpKeepAlive);
+
+    /**
+     * 设置 SO_BACKLOG 选项
+     *
+     * @param soBacklog backlog 大小
+     * @return 当前实例
+     */
+    MqttServer soBacklog(int soBacklog);
+
+    /**
+     * 设置写缓冲区水位标记
+     *
+     * @param low  低水位标记（字节）
+     * @param high 高水位标记（字节）
+     * @return 当前实例
+     */
+    MqttServer writeBufferWaterMark(int low, int high);
+
+    /**
      * 核心处理器：定义每一个连接建立时的行为
      *
-     * @param handler 接收 {@link ServerConnection}，返回 Mono<Void>
+     * @param handler 接收 {@link ServerConnection}，返回 Mono&lt;Void&gt;
      *                (通常是 validate.then(accept))
      * @return 当前实例
      */
@@ -56,6 +131,14 @@ public interface MqttServer {
      * @return DisposableServer 实例
      */
     DisposableServer bindNow();
+
+    /**
+     * 阻塞并绑定端口，启动服务（带超时）
+     *
+     * @param timeout 超时时间
+     * @return DisposableServer 实例
+     */
+    DisposableServer bindNow(Duration timeout);
 
     /**
      * 响应式启动

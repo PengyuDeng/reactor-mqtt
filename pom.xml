@@ -11,6 +11,7 @@
     <description>Reactor-based MQTT Server implementation</description>
     <modules>
         <module>reactor-mqtt-core</module>
+        <module>reactor-mqtt-broker</module>
     </modules>
 
     <properties>

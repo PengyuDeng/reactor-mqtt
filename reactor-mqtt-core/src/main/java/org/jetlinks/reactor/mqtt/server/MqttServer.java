@@ -126,6 +126,25 @@ public interface MqttServer {
     MqttServer handle(Function<ServerConnection, Mono<Void>> handler);
 
     /**
+     * 设置认证器
+     *
+     * @param authenticator 认证器实例
+     * @return 当前实例
+     */
+    MqttServer authenticator(MqttAuthenticator authenticator);
+
+    /**
+     * 设置简单的用户名/密码认证
+     *
+     * @param username 用户名
+     * @param password 密码
+     * @return 当前实例
+     */
+    default MqttServer auth(String username, String password) {
+        return authenticator(MqttAuthenticator.simple(username, password));
+    }
+
+    /**
      * 阻塞并绑定端口，启动服务
      *
      * @return DisposableServer 实例

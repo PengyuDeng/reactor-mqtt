@@ -13,24 +13,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jetlinks.reactor.mqtt.server;
+package org.jetlinks.reactor.mqtt.broker;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.TopicMatcher;
+import org.jetlinks.reactor.mqtt.server.ServerConnection;
+import org.jetlinks.reactor.mqtt.server.ServerConnectionListener;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.*;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * MQTT 消息代理 - 负责管理客户端连接和消息路由
+ * MQTT 消息路由器 - 负责管理客户端连接和消息路由
  *
- * <p>这个类是 MQTT 服务器的核心组件，负责：
+ * <p>这个类是 MQTT Broker 的核心组件，负责：
  * <ul>
  *   <li>管理所有活跃的客户端连接</li>
  *   <li>维护订阅关系（clientId -> topics）</li>
@@ -41,9 +45,9 @@ import java.util.logging.Logger;
  *
  * @author PengyuDeng
  */
-public class MqttBroker {
+class BrokerMessageRouter implements ServerConnectionListener {
 
-    private static final Logger log = Logger.getLogger(MqttBroker.class.getName());
+    private static final Logger log = Logger.getLogger(BrokerMessageRouter.class.getName());
 
     /**
      * 存储所有活跃的客户端连接: clientId -> ServerConnection
@@ -57,12 +61,49 @@ public class MqttBroker {
     private final Map<String, Set<String>> subscriptions = new ConcurrentHashMap<>();
 
     /**
+     * 创建一个新的消息路由器实例
+     */
+    BrokerMessageRouter() {
+    }
+
+
+    @Override
+    public Mono<Void> onConnectionAccepted(String clientId, ServerConnection connection) {
+        registerConnection(clientId, connection);
+        return Mono.empty();
+    }
+
+    @Override
+    public Mono<Void> onConnectionClosed(String clientId) {
+        unregisterConnection(clientId);
+        return Mono.empty();
+    }
+
+    @Override
+    public Mono<Void> onSubscribe(String clientId, String topic) {
+        addSubscription(clientId, topic);
+        return Mono.empty();
+    }
+
+    @Override
+    public Mono<Void> onUnsubscribe(String clientId, String topic) {
+        removeSubscription(clientId, topic);
+        return Mono.empty();
+    }
+
+    @Override
+    public Mono<Void> onPublish(String clientId, MqttPublishMessage message) {
+        return publish(clientId, message);
+    }
+
+
+    /**
      * 注册一个客户端连接
      *
      * @param clientId   客户端ID
      * @param connection 连接实例
      */
-    public void registerConnection(String clientId, ServerConnection connection) {
+    private void registerConnection(String clientId, ServerConnection connection) {
         if (clientId == null || connection == null) {
             throw new IllegalArgumentException("clientId and connection must not be null");
         }
@@ -81,7 +122,7 @@ public class MqttBroker {
      *
      * @param clientId 客户端ID
      */
-    public void unregisterConnection(String clientId) {
+    private void unregisterConnection(String clientId) {
         connections.remove(clientId);
         // 清理该客户端的所有订阅
         subscriptions.values().forEach(clients -> clients.remove(clientId));
@@ -94,7 +135,7 @@ public class MqttBroker {
      * @param clientId 客户端ID
      * @param topic    订阅的主题（可能包含通配符）
      */
-    public void addSubscription(String clientId, String topic) {
+    private void addSubscription(String clientId, String topic) {
         subscriptions.computeIfAbsent(topic, k -> ConcurrentHashMap.newKeySet()).add(clientId);
         log.log(Level.FINE, "Client " + clientId + " subscribed to: " + topic);
     }
@@ -105,7 +146,7 @@ public class MqttBroker {
      * @param clientId 客户端ID
      * @param topic    要取消订阅的主题
      */
-    public void removeSubscription(String clientId, String topic) {
+    private void removeSubscription(String clientId, String topic) {
         Set<String> clients = subscriptions.get(topic);
         if (clients != null) {
             clients.remove(clientId);
@@ -126,7 +167,7 @@ public class MqttBroker {
      * @param retain            是否保留
      * @return 发布完成的Mono
      */
-    public Mono<Void> publish(String publisherClientId, String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
+    private Mono<Void> publish(String publisherClientId, String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
         // 查找所有匹配的订阅者
         Set<String> matchedClients = new HashSet<>();
 
@@ -145,8 +186,6 @@ public class MqttBroker {
 
         log.log(Level.FINE, "Publishing to topic " + topic + " for " + matchedClients.size() + " clients");
 
-        // 向所有匹配的客户端发送消息
-        // 使用 subscribeOn 确保发送操作在不同的调度器上执行，避免死锁
         return Flux.fromIterable(matchedClients)
                    .flatMap(clientId -> {
                        ServerConnection connection = connections.get(clientId);
@@ -158,26 +197,19 @@ public class MqttBroker {
                        // 复制payload，因为每个客户端都需要独立的ByteBuf
                        ByteBuf clientPayload = payload.retainedDuplicate();
 
-                       // 调用 DefaultServerConnection 的便捷 publish 方法
-                       if (connection instanceof DefaultServerConnection) {
-                           return ((DefaultServerConnection) connection).publish(topic, clientPayload, qos, retain)
+                       // 构建 MqttPublishMessage
+                       int messageId = qos == io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE ? 0 : 1;
+                       io.netty.handler.codec.mqtt.MqttPublishMessage publishMessage =
+                               io.netty.handler.codec.mqtt.MqttMessageBuilders.publish()
+                                                                              .topicName(topic)
+                                                                              .payload(clientPayload)
+                                                                              .qos(qos)
+                                                                              .retained(retain)
+                                                                              .messageId(messageId)
+                                                                              .build();
+                       return connection.publish(publishMessage)
                                         .doFinally(signal -> clientPayload.release())
                                         .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()); // 异步执行
-                       } else {
-                           // 构建 MqttPublishMessage
-                           int messageId = qos == io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE ? 0 : 1;
-                           io.netty.handler.codec.mqtt.MqttPublishMessage publishMessage =
-                               io.netty.handler.codec.mqtt.MqttMessageBuilders.publish()
-                                   .topicName(topic)
-                                   .payload(clientPayload)
-                                   .qos(qos)
-                                   .retained(retain)
-                                   .messageId(messageId)
-                                   .build();
-                           return connection.publish(publishMessage)
-                                           .doFinally(signal -> clientPayload.release())
-                                           .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()); // 异步执行
-                       }
                    })
                    .then();
     }
@@ -189,7 +221,7 @@ public class MqttBroker {
      * @param message           MQTT发布消息
      * @return 发布完成的Mono
      */
-    public Mono<Void> publish(String publisherClientId, MqttPublishMessage message) {
+    private Mono<Void> publish(String publisherClientId, MqttPublishMessage message) {
         String topic = message.variableHeader().topicName();
         ByteBuf payload = message.payload();
         MqttQoS qos = message.fixedHeader().qosLevel();
@@ -203,7 +235,7 @@ public class MqttBroker {
      *
      * @return 连接数
      */
-    public int getConnectionCount() {
+    int getConnectionCount() {
         return connections.size();
     }
 
@@ -212,7 +244,7 @@ public class MqttBroker {
      *
      * @return 订阅数
      */
-    public int getSubscriptionCount() {
+    int getSubscriptionCount() {
         return subscriptions.values().stream()
                             .mapToInt(Set::size)
                             .sum();
@@ -224,7 +256,7 @@ public class MqttBroker {
      * @param clientId 客户端ID
      * @return 订阅主题集合
      */
-    public Set<String> getClientSubscriptions(String clientId) {
+    Set<String> getClientSubscriptions(String clientId) {
         Set<String> topics = new HashSet<>();
         for (Map.Entry<String, Set<String>> entry : subscriptions.entrySet()) {
             if (entry.getValue().contains(clientId)) {

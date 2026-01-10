@@ -42,7 +42,7 @@ import java.util.logging.Logger;
  *
  * @author PengyuDeng
  */
-class DefaultMqttServer implements MqttServer {
+public class DefaultMqttServer implements MqttServer {
 
     private static final Logger log = Logger.getLogger(DefaultMqttServer.class.getName());
 
@@ -52,6 +52,8 @@ class DefaultMqttServer implements MqttServer {
     private Duration idleTimeout = Duration.ofSeconds(120);
     private SslContext sslContext;
     private Function<ServerConnection, Mono<Void>> connectionHandler;
+    private ServerConnectionListener connectionListener = ServerConnectionListener.empty();
+    private MqttAuthenticator authenticator = MqttAuthenticator.allowAnonymous();
 
     private LoopResources loopResources;
     private int workerCount = Runtime.getRuntime().availableProcessors();
@@ -62,11 +64,9 @@ class DefaultMqttServer implements MqttServer {
     private int writeBufferHigh = 64 * 1024;
 
     /**
-     * MQTT消息代理，负责消息路由
+     * 创建一个新的 DefaultMqttServer 实例
      */
-    private final MqttBroker broker = new MqttBroker();
-
-    DefaultMqttServer() {
+    public DefaultMqttServer() {
     }
 
     @Override
@@ -160,6 +160,23 @@ class DefaultMqttServer implements MqttServer {
         return this;
     }
 
+    /**
+     * 设置连接事件监听器
+     *
+     * @param listener 事件监听器
+     * @return MqttServer
+     */
+    public MqttServer connectionListener(ServerConnectionListener listener) {
+        this.connectionListener = listener != null ? listener : ServerConnectionListener.empty();
+        return this;
+    }
+
+    @Override
+    public MqttServer authenticator(MqttAuthenticator authenticator) {
+        this.authenticator = authenticator != null ? authenticator : MqttAuthenticator.allowAnonymous();
+        return this;
+    }
+
     @Override
     public Mono<? extends DisposableServer> bind() {
         return createTcpServer().bind();
@@ -209,18 +226,28 @@ class DefaultMqttServer implements MqttServer {
     }
 
     private Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
-        return new DefaultServerConnection(inbound, outbound, broker).run(this::invokeHandler);
+        return new DefaultServerConnection(inbound, outbound, connectionListener).run(this::invokeHandler);
     }
 
 
     private Mono<Void> invokeHandler(ServerConnection serverConnection) {
-        if (connectionHandler == null) {
-            return serverConnection.accept();
-        }
-        return connectionHandler.apply(serverConnection)
-                                .onErrorResume(err -> {
-                                    log.log(Level.SEVERE, "处理 MQTT 连接时出错: " + err.getMessage(), err);
-                                    return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
-                                });
+        // 先进行认证
+        return authenticator.authenticate(serverConnection)
+                            .flatMap(authenticated -> {
+                                if (!authenticated) {
+                                    log.log(Level.WARNING, "Client " + serverConnection.getClientId() + " authentication failed");
+                                    return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD);
+                                }
+
+                                // 认证通过，执行用户的 handler
+                                if (connectionHandler == null) {
+                                    return serverConnection.accept();
+                                }
+                                return connectionHandler.apply(serverConnection)
+                                                        .onErrorResume(err -> {
+                                                            log.log(Level.SEVERE, "处理 MQTT 连接时出错: " + err.getMessage(), err);
+                                                            return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
+                                                        });
+                            });
     }
 }

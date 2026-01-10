@@ -30,6 +30,7 @@ import reactor.netty.tcp.TcpClient;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -96,18 +97,21 @@ class DefaultMqttClient implements MqttClient {
         return this;
     }
 
+    @Override
     public MqttClient auth(String username, String password) {
         this.username = username;
         this.password = password != null ? password.getBytes() : null;
         return this;
     }
 
+    @Override
     public MqttClient auth(String username, byte[] password) {
         this.username = username;
         this.password = password;
         return this;
     }
 
+    @Override
     public MqttClient keepAlive(short seconds) {
         if (seconds < 0) {
             throw new IllegalArgumentException("keepAlive must not be negative");
@@ -116,11 +120,13 @@ class DefaultMqttClient implements MqttClient {
         return this;
     }
 
+    @Override
     public MqttClient cleanSession(boolean cleanSession) {
         this.cleanSession = cleanSession;
         return this;
     }
 
+    @Override
     public MqttClient protocolVersion(MqttVersion version) {
         if (version == null) {
             throw new IllegalArgumentException("protocolVersion must not be null");
@@ -129,6 +135,7 @@ class DefaultMqttClient implements MqttClient {
         return this;
     }
 
+    @Override
     public MqttClient maxMessageSize(int maxMessageSize) {
         if (maxMessageSize <= 0) {
             throw new IllegalArgumentException("maxMessageSize must be positive");
@@ -137,30 +144,36 @@ class DefaultMqttClient implements MqttClient {
         return this;
     }
 
+    @Override
     public MqttClient will(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
         this.willMessage = new MqttWillMessage(topic, payload, qos, retain);
         return this;
     }
 
+    @Override
     public MqttClient will(String topic, byte[] payload, MqttQoS qos, boolean retain) {
         return will(topic, payload != null ? Unpooled.wrappedBuffer(payload) : null, qos, retain);
     }
 
+    @Override
     public MqttClient will(MqttWillMessage willMessage) {
         this.willMessage = willMessage;
         return this;
     }
 
+    @Override
     public MqttClient ssl(SslContext sslContext) {
         this.sslContext = sslContext;
         return this;
     }
 
+    @Override
     public MqttClient reconnectStrategy(ReconnectStrategy strategy) {
         this.reconnectStrategy = strategy != null ? strategy : ReconnectStrategy.none();
         return this;
     }
 
+    @Override
     public MqttClient reconnect(boolean enable) {
         if (enable) {
             this.reconnectStrategy = ReconnectStrategy.exponentialBackoff(
@@ -171,16 +184,19 @@ class DefaultMqttClient implements MqttClient {
         return this;
     }
 
+    @Override
     public MqttClient autoResubscribe(boolean autoResubscribe) {
         this.autoResubscribe = autoResubscribe;
         return this;
     }
 
+    @Override
     public MqttClient autoAck(boolean autoAck) {
         this.autoAck = autoAck;
         return this;
     }
 
+    @Override
     public MqttClient qos(MqttQoS qos) {
         if (qos == null) {
             throw new IllegalArgumentException("defaultQos must not be null");
@@ -189,11 +205,13 @@ class DefaultMqttClient implements MqttClient {
         return this;
     }
 
+    @Override
     public MqttClient loopResources(LoopResources loopResources) {
         this.loopResources = loopResources;
         return this;
     }
 
+    @Override
     public MqttClient tcpNoDelay(boolean tcpNoDelay) {
         this.tcpNoDelay = tcpNoDelay;
         return this;
@@ -204,16 +222,19 @@ class DefaultMqttClient implements MqttClient {
         return this;
     }
 
+    @Override
     public MqttClient subscribeTimeout(Duration timeout) {
         this.subscribeTimeout = timeout;
         return this;
     }
 
+    @Override
     public MqttClient unsubscribeTimeout(Duration timeout) {
         this.unsubscribeTimeout = timeout;
         return this;
     }
 
+    @Override
     public MqttClient publishTimeout(Duration timeout) {
         this.publishTimeout = timeout;
         return this;
@@ -252,7 +273,7 @@ class DefaultMqttClient implements MqttClient {
 
         return tcpClient.connect()
                         .flatMap(conn -> {
-                            java.util.function.Consumer<ClientReceivedPublish> consumer = null;
+                            Consumer<ClientReceivedPublish> consumer = null;
                             if (publishingHandler != null) {
                                 consumer = pub -> publishingHandler.apply(pub).subscribe();
                             }
@@ -283,13 +304,7 @@ class DefaultMqttClient implements MqttClient {
     @Override
     public ClientConnection connectNow() {
         return connect()
-                .timeout(connectTimeout.plusSeconds(5))
-                .block();
-    }
-
-    public ClientConnection connectNow(Duration timeout) {
-        return connect()
-                .timeout(timeout)
+                .timeout(connectTimeout)
                 .block();
     }
 

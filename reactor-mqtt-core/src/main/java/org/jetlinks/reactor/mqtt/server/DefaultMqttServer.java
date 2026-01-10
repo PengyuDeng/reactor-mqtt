@@ -52,7 +52,6 @@ public class DefaultMqttServer implements MqttServer {
     private Duration idleTimeout = Duration.ofSeconds(120);
     private SslContext sslContext;
     private Function<ServerConnection, Mono<Void>> connectionHandler;
-    private ServerConnectionListener connectionListener = ServerConnectionListener.empty();
     private MqttAuthenticator authenticator = MqttAuthenticator.allowAnonymous();
 
     private LoopResources loopResources;
@@ -160,16 +159,6 @@ public class DefaultMqttServer implements MqttServer {
         return this;
     }
 
-    /**
-     * 设置连接事件监听器
-     *
-     * @param listener 事件监听器
-     * @return MqttServer
-     */
-    public MqttServer connectionListener(ServerConnectionListener listener) {
-        this.connectionListener = listener != null ? listener : ServerConnectionListener.empty();
-        return this;
-    }
 
     @Override
     public MqttServer authenticator(MqttAuthenticator authenticator) {
@@ -225,12 +214,12 @@ public class DefaultMqttServer implements MqttServer {
         }
     }
 
-    private Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
-        return new DefaultServerConnection(inbound, outbound, connectionListener).run(this::invokeHandler);
+    protected Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
+        return new DefaultServerConnection(inbound, outbound).run(this::invokeHandler);
     }
 
 
-    private Mono<Void> invokeHandler(ServerConnection serverConnection) {
+    protected Mono<Void> invokeHandler(ServerConnection serverConnection) {
         // 先进行认证
         return authenticator.authenticate(serverConnection)
                             .flatMap(authenticated -> {

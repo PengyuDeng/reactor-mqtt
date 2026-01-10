@@ -15,12 +15,15 @@
  */
 package org.jetlinks.reactor.mqtt.broker;
 
+import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.ssl.SslContext;
 import org.jetlinks.reactor.mqtt.server.DefaultMqttServer;
-import org.jetlinks.reactor.mqtt.server.MqttServer;
 import org.jetlinks.reactor.mqtt.server.ServerConnection;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.netty.DisposableServer;
+import reactor.netty.NettyInbound;
+import reactor.netty.NettyOutbound;
 import reactor.netty.resources.LoopResources;
 
 import java.time.Duration;
@@ -29,113 +32,90 @@ import java.util.function.Function;
 /**
  * MQTT Broker 默认实现
  *
- * <p>基于 {@link DefaultMqttServer} 和 {@link BrokerMessageRouter} 实现完整的 MQTT Broker 功能。</p>
+ * <p>通过继承 {@link DefaultMqttServer} 并覆写连接处理逻辑，集成 {@link BrokerMessageRouter} 实现消息路由功能。</p>
  *
  * @author PengyuDeng
  */
-class DefaultMqttBroker implements MqttBroker {
+class DefaultMqttBroker extends DefaultMqttServer implements MqttBroker {
 
-    private final DefaultMqttServer server;
     private final BrokerMessageRouter router;
 
     DefaultMqttBroker() {
-        this.server = new DefaultMqttServer();
+        super();
         this.router = new BrokerMessageRouter();
-        // 将路由器设置为服务器的连接监听器
-        this.server.connectionListener(router);
     }
 
     @Override
     public MqttBroker host(String host) {
-        server.host(host);
+        super.host(host);
         return this;
     }
 
     @Override
     public MqttBroker port(int port) {
-        server.port(port);
+        super.port(port);
         return this;
     }
 
     @Override
     public MqttBroker maxMessageSize(int maxMessageSize) {
-        server.maxMessageSize(maxMessageSize);
+        super.maxMessageSize(maxMessageSize);
         return this;
     }
 
     @Override
     public MqttBroker idleTimeout(Duration idleTimeout) {
-        server.idleTimeout(idleTimeout);
+        super.idleTimeout(idleTimeout);
         return this;
     }
 
     @Override
     public MqttBroker ssl(SslContext sslContext) {
-        server.ssl(sslContext);
+        super.ssl(sslContext);
         return this;
     }
 
     @Override
     public MqttBroker loopResources(LoopResources loopResources) {
-        server.loopResources(loopResources);
+        super.loopResources(loopResources);
         return this;
     }
 
     @Override
     public MqttBroker workerCount(int workerCount) {
-        server.workerCount(workerCount);
+        super.workerCount(workerCount);
         return this;
     }
 
     @Override
     public MqttBroker tcpNoDelay(boolean tcpNoDelay) {
-        server.tcpNoDelay(tcpNoDelay);
+        super.tcpNoDelay(tcpNoDelay);
         return this;
     }
 
     @Override
     public MqttBroker tcpKeepAlive(boolean tcpKeepAlive) {
-        server.tcpKeepAlive(tcpKeepAlive);
+        super.tcpKeepAlive(tcpKeepAlive);
         return this;
     }
 
     @Override
     public MqttBroker soBacklog(int soBacklog) {
-        server.soBacklog(soBacklog);
+        super.soBacklog(soBacklog);
         return this;
     }
 
     @Override
     public MqttBroker writeBufferWaterMark(int low, int high) {
-        server.writeBufferWaterMark(low, high);
+        super.writeBufferWaterMark(low, high);
         return this;
     }
 
     @Override
-    public MqttServer handle(Function<ServerConnection, Mono<Void>> handler) {
-        server.handle(handler);
-        return this;
-    }
-
-    @Override
-    public MqttServer authenticator(org.jetlinks.reactor.mqtt.server.MqttAuthenticator authenticator) {
-        server.authenticator(authenticator);
-        return this;
-    }
-
-    @Override
-    public DisposableServer bindNow() {
-        return server.bindNow();
-    }
-
-    @Override
-    public DisposableServer bindNow(Duration timeout) {
-        return server.bindNow(timeout);
-    }
-
-    @Override
-    public Mono<? extends DisposableServer> bind() {
-        return server.bind();
+    protected Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
+        // 覆写父类的 handle 方法，使用 BrokerServerConnection 注入消息路由功能
+        BrokerServerConnection brokerConnection = new BrokerServerConnection(inbound, outbound, router);
+        return brokerConnection.run(conn -> super.invokeHandler(conn));
     }
 
     @Override

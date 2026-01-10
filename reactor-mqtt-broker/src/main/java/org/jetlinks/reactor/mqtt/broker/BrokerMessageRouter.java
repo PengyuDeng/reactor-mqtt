@@ -16,15 +16,14 @@
 package org.jetlinks.reactor.mqtt.broker;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.mqtt.MqttMessageBuilders;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
-import org.jetlinks.reactor.mqtt.TopicMatcher;
+import org.jetlinks.reactor.mqtt.TopicTrie;
 import org.jetlinks.reactor.mqtt.server.ServerConnection;
-import org.jetlinks.reactor.mqtt.server.ServerConnectionListener;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -55,10 +54,10 @@ class BrokerMessageRouter implements ServerConnectionListener {
     private final Map<String, ServerConnection> connections = new ConcurrentHashMap<>();
 
     /**
-     * 存储订阅关系: topic -> Set<clientId>
-     * 注意：topic 可能包含通配符（订阅时）或具体路径（发布时）
+     * 基于通用 TopicTrie 的订阅索引，提供 O(L) 复杂度的主题匹配
+     * L = 主题层级数（通常 3-5），远优于线性遍历的 O(N)
      */
-    private final Map<String, Set<String>> subscriptions = new ConcurrentHashMap<>();
+    private final TopicTrie<String> subscriptionTrie = new TopicTrie<>();
 
     /**
      * 创建一个新的消息路由器实例
@@ -76,6 +75,8 @@ class BrokerMessageRouter implements ServerConnectionListener {
     @Override
     public Mono<Void> onConnectionClosed(String clientId) {
         unregisterConnection(clientId);
+        // 使用通用 TopicTrie 批量清理该客户端的所有订阅
+        subscriptionTrie.removeAll(clientId);
         return Mono.empty();
     }
 
@@ -118,47 +119,42 @@ class BrokerMessageRouter implements ServerConnectionListener {
     }
 
     /**
-     * 取消注册客户端连接
+     * 取消注册客户端连接，并清理所有订阅
      *
      * @param clientId 客户端ID
      */
     private void unregisterConnection(String clientId) {
         connections.remove(clientId);
-        // 清理该客户端的所有订阅
-        subscriptions.values().forEach(clients -> clients.remove(clientId));
+        // Trie 树会在 onConnectionClosed 中统一清理
         log.log(Level.FINE, "Unregistered connection for client: " + clientId);
     }
 
     /**
-     * 添加订阅
+     * 添加订阅到 Trie 树
      *
      * @param clientId 客户端ID
      * @param topic    订阅的主题（可能包含通配符）
      */
     private void addSubscription(String clientId, String topic) {
-        subscriptions.computeIfAbsent(topic, k -> ConcurrentHashMap.newKeySet()).add(clientId);
+        subscriptionTrie.addSubscription(topic, clientId);
         log.log(Level.FINE, "Client " + clientId + " subscribed to: " + topic);
     }
 
     /**
-     * 移除订阅
+     * 从 Trie 树移除订阅
      *
      * @param clientId 客户端ID
      * @param topic    要取消订阅的主题
      */
     private void removeSubscription(String clientId, String topic) {
-        Set<String> clients = subscriptions.get(topic);
-        if (clients != null) {
-            clients.remove(clientId);
-            if (clients.isEmpty()) {
-                subscriptions.remove(topic);
-            }
-        }
+        subscriptionTrie.removeSubscription(topic, clientId);
         log.log(Level.FINE, "Client " + clientId + " unsubscribed from: " + topic);
     }
 
     /**
      * 发布消息到所有匹配的订阅者
+     *
+     * <p>使用 Trie 树快速查找匹配的订阅者，时间复杂度 O(L)，L = 主题层级数</p>
      *
      * @param publisherClientId 发布者的客户端ID（可能为null）
      * @param topic             消息主题（具体的主题路径，不含通配符）
@@ -168,16 +164,8 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @return 发布完成的Mono
      */
     private Mono<Void> publish(String publisherClientId, String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
-        // 查找所有匹配的订阅者
-        Set<String> matchedClients = new HashSet<>();
-
-        for (Map.Entry<String, Set<String>> entry : subscriptions.entrySet()) {
-            String subscriptionTopic = entry.getKey();
-            // 使用 TopicMatcher 检查发布的主题是否匹配订阅的主题（订阅主题可能有通配符）
-            if (TopicMatcher.matches(subscriptionTopic, topic)) {
-                matchedClients.addAll(entry.getValue());
-            }
-        }
+        // 使用 Trie 树快速查找所有匹配的订阅者 - O(L) 复杂度
+        Set<String> matchedClients = subscriptionTrie.findMatches(topic);
 
         if (matchedClients.isEmpty()) {
             log.log(Level.FINE, "No subscribers for topic: " + topic);
@@ -194,22 +182,22 @@ class BrokerMessageRouter implements ServerConnectionListener {
                            return Mono.empty();
                        }
 
-                       // 复制payload，因为每个客户端都需要独立的ByteBuf
-                       ByteBuf clientPayload = payload.retainedDuplicate();
-
-                       // 构建 MqttPublishMessage
-                       int messageId = qos == io.netty.handler.codec.mqtt.MqttQoS.AT_MOST_ONCE ? 0 : 1;
-                       io.netty.handler.codec.mqtt.MqttPublishMessage publishMessage =
-                               io.netty.handler.codec.mqtt.MqttMessageBuilders.publish()
-                                                                              .topicName(topic)
-                                                                              .payload(clientPayload)
-                                                                              .qos(qos)
-                                                                              .retained(retain)
-                                                                              .messageId(messageId)
-                                                                              .build();
-                       return connection.publish(publishMessage)
-                                        .doFinally(signal -> clientPayload.release())
-                                        .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()); // 异步执行
+                       // 使用 Mono.using 保证 ByteBuf 正确释放，防止内存泄漏
+                       return Mono.using(
+                               () -> payload.retainedDuplicate(),              // 资源获取
+                               clientPayload -> {                              // 资源使用
+                                   int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : 1;
+                                   MqttPublishMessage publishMessage = MqttMessageBuilders.publish()
+                                                                                          .topicName(topic)
+                                                                                          .payload(clientPayload)
+                                                                                          .qos(qos)
+                                                                                          .retained(retain)
+                                                                                          .messageId(messageId)
+                                                                                          .build();
+                                   return connection.publish(publishMessage);
+                               },
+                               ByteBuf::release                                // 资源释放（保证执行）
+                       ).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
                    })
                    .then();
     }
@@ -242,27 +230,9 @@ class BrokerMessageRouter implements ServerConnectionListener {
     /**
      * 获取当前订阅数量
      *
-     * @return 订阅数
+     * @return 订阅数（使用 Trie 树统计）
      */
     int getSubscriptionCount() {
-        return subscriptions.values().stream()
-                            .mapToInt(Set::size)
-                            .sum();
-    }
-
-    /**
-     * 获取指定客户端的所有订阅主题
-     *
-     * @param clientId 客户端ID
-     * @return 订阅主题集合
-     */
-    Set<String> getClientSubscriptions(String clientId) {
-        Set<String> topics = new HashSet<>();
-        for (Map.Entry<String, Set<String>> entry : subscriptions.entrySet()) {
-            if (entry.getValue().contains(clientId)) {
-                topics.add(entry.getKey());
-            }
-        }
-        return topics;
+        return subscriptionTrie.getTotalSubscriptionCount();
     }
 }

@@ -16,6 +16,7 @@
 package org.jetlinks.reactor.mqtt.client;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
+import org.jetlinks.reactor.mqtt.TopicTrie;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -25,6 +26,7 @@ import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
@@ -34,7 +36,7 @@ import java.util.logging.Logger;
 /**
  * 基于 Trie 树的高性能订阅管理器
  *
- * <p>使用前缀树优化主题匹配性能，特别适合大量订阅的场景。</p>
+ * <p>使用通用 TopicTrie 优化主题匹配性能，特别适合大量订阅的场景。</p>
  * <p>时间复杂度：O(L) 其中 L 是主题层级数，而不是 O(N) 其中 N 是订阅数量。</p>
  *
  * @author PengyuDeng
@@ -42,11 +44,10 @@ import java.util.logging.Logger;
 class TrieBasedSubscriptionManager implements SubscriptionManager {
 
     private static final Logger log = Logger.getLogger(TrieBasedSubscriptionManager.class.getName());
-    private static final String LEVEL_SEPARATOR = "/";
-    private static final String SINGLE_WILDCARD = "+";
-    private static final String MULTI_WILDCARD = "#";
 
-    private final TrieNode root = new TrieNode();
+    // 使用通用 TopicTrie 管理订阅，存储 SubscriptionHandlers 对象
+    // 使用 CopyOnWriteArraySet 确保同一个 SubscriptionHandlers 只被存储一次
+    private final TopicTrie<SubscriptionHandlers> trie = new TopicTrie<>();
     // 用于快速查找和清理
     private final Map<String, SubscriptionHandlers> subscriptionsMap = new ConcurrentHashMap<>();
 
@@ -62,8 +63,8 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                 topicStr,
                 k -> {
                     SubscriptionHandlers h = new SubscriptionHandlers(topicStr, qos, connection);
-                    // 将订阅添加到 Trie 树
-                    addToTrie(topicStr, h);
+                    // 将订阅添加到通用 TopicTrie
+                    trie.addSubscription(topicStr, h);
                     return h;
                 }
         );
@@ -72,18 +73,16 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         return handlers.addHandler(handler, () -> {
             // 当最后一个处理器被移除时，从 Trie 和 Map 中删除
             subscriptionsMap.remove(topicStr);
-            removeFromTrie(topicStr);
+            trie.removeSubscription(topicStr, handlers);
         });
     }
 
     @Override
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
         String topic = publishing.getTopic();
-        String[] levels = topic.split(LEVEL_SEPARATOR);
 
-        // 使用 Trie 树快速查找匹配的订阅
-        List<SubscriptionHandlers> matchedHandlers = new ArrayList<>();
-        findMatches(root, levels, 0, matchedHandlers);
+        // 使用通用 TopicTrie 快速查找匹配的订阅
+        Set<SubscriptionHandlers> matchedHandlers = trie.findMatches(topic);
 
         // 并行处理所有匹配的订阅
         return Flux.fromIterable(matchedHandlers)
@@ -103,140 +102,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
     public void clear() {
         subscriptionsMap.values().forEach(SubscriptionHandlers::dispose);
         subscriptionsMap.clear();
-        root.children.clear();
-        root.plusWildcard = null;
-        root.hashWildcard = null;
-    }
-
-    /**
-     * 将订阅添加到 Trie 树
-     */
-    private void addToTrie(String topic, SubscriptionHandlers handlers) {
-        String[] levels = topic.split(LEVEL_SEPARATOR);
-        TrieNode current = root;
-
-        for (int i = 0; i < levels.length; i++) {
-            String level = levels[i];
-
-            if (MULTI_WILDCARD.equals(level)) {
-                // # 通配符
-                if (current.hashWildcard == null) {
-                    current.hashWildcard = new TrieNode();
-                }
-                current = current.hashWildcard;
-                break; // # 必须是最后一个
-            } else if (SINGLE_WILDCARD.equals(level)) {
-                // + 通配符
-                if (current.plusWildcard == null) {
-                    current.plusWildcard = new TrieNode();
-                }
-                current = current.plusWildcard;
-            } else {
-                // 精确匹配
-                current = current.children.computeIfAbsent(level, k -> new TrieNode());
-            }
-        }
-
-        // 在叶子节点添加处理器
-        current.handlers.add(handlers);
-    }
-
-    /**
-     * 从 Trie 树中移除订阅
-     */
-    private void removeFromTrie(String topic) {
-        String[] levels = topic.split(LEVEL_SEPARATOR);
-        removeFromTrieRecursive(root, levels, 0);
-    }
-
-    private boolean removeFromTrieRecursive(TrieNode node, String[] levels, int depth) {
-        if (depth == levels.length) {
-            // 到达叶子节点，清空处理器
-            node.handlers.clear();
-            // 如果节点没有子节点，可以删除
-            return node.children.isEmpty() && node.plusWildcard == null && node.hashWildcard == null;
-        }
-
-        String level = levels[depth];
-        boolean shouldDelete = false;
-
-        if (MULTI_WILDCARD.equals(level)) {
-            if (node.hashWildcard != null) {
-                node.hashWildcard.handlers.clear();
-                shouldDelete = node.hashWildcard.children.isEmpty() && node.hashWildcard.plusWildcard == null;
-                if (shouldDelete) {
-                    node.hashWildcard = null;
-                }
-            }
-        } else if (SINGLE_WILDCARD.equals(level)) {
-            if (node.plusWildcard != null) {
-                shouldDelete = removeFromTrieRecursive(node.plusWildcard, levels, depth + 1);
-                if (shouldDelete) {
-                    node.plusWildcard = null;
-                }
-            }
-        } else {
-            TrieNode child = node.children.get(level);
-            if (child != null) {
-                shouldDelete = removeFromTrieRecursive(child, levels, depth + 1);
-                if (shouldDelete) {
-                    node.children.remove(level);
-                }
-            }
-        }
-
-        // 当前节点是否应该被删除
-        return node.handlers.isEmpty() &&
-               node.children.isEmpty() &&
-               node.plusWildcard == null &&
-               node.hashWildcard == null;
-    }
-
-    /**
-     * 在 Trie 树中查找匹配的订阅
-     */
-    private void findMatches(TrieNode node, String[] levels, int depth, List<SubscriptionHandlers> result) {
-        // 如果当前节点有处理器，添加到结果（精确匹配或通配符匹配完成）
-        if (!node.handlers.isEmpty() && depth == levels.length) {
-            result.addAll(node.handlers);
-        }
-
-        // # 通配符匹配剩余所有内容
-        if (node.hashWildcard != null) {
-            result.addAll(node.hashWildcard.handlers);
-        }
-
-        // 如果已经处理完所有层级，返回
-        if (depth >= levels.length) {
-            return;
-        }
-
-        String level = levels[depth];
-
-        // 1. 精确匹配
-        TrieNode exactNode = node.children.get(level);
-        if (exactNode != null) {
-            findMatches(exactNode, levels, depth + 1, result);
-        }
-
-        // 2. + 通配符匹配当前层级
-        if (node.plusWildcard != null) {
-            findMatches(node.plusWildcard, levels, depth + 1, result);
-        }
-    }
-
-    /**
-     * Trie 树节点
-     */
-    private static class TrieNode {
-        // 子节点映射（精确匹配）
-        final Map<String, TrieNode> children = new ConcurrentHashMap<>();
-        // + 通配符节点
-        TrieNode plusWildcard;
-        // # 通配符节点
-        TrieNode hashWildcard;
-        // 当前节点的处理器列表（如果是叶子节点或通配符节点）
-        final List<SubscriptionHandlers> handlers = new CopyOnWriteArrayList<>();
+        trie.clear();
     }
 
     /**

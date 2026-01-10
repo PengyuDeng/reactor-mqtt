@@ -78,7 +78,6 @@ public class DefaultServerConnection implements ServerConnection {
     private final Connection connection;
     private final NettyInbound inbound;
     private final NettyOutbound outbound;
-    private final ServerConnectionListener listener;
 
     @SuppressWarnings("unused") // accessed via VarHandle
     private volatile String clientId = "unknown";
@@ -108,17 +107,14 @@ public class DefaultServerConnection implements ServerConnection {
 
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
-    public DefaultServerConnection(NettyInbound inbound, NettyOutbound outbound, ServerConnectionListener listener) {
+    public DefaultServerConnection(NettyInbound inbound, NettyOutbound outbound) {
         this.inbound = inbound;
         this.outbound = outbound;
-        this.listener = listener != null ? listener : ServerConnectionListener.empty();
         this.connection = (Connection) inbound;
         LAST_PING_TIME.set(this, System.currentTimeMillis());
 
         connection.onDispose(() -> {
             if (casSetClosed()) {
-                // 通知监听器连接关闭
-                listener.onConnectionClosed(clientId).subscribe();
                 emitEmpty(disposeSink);
             }
         });
@@ -231,17 +227,14 @@ public class DefaultServerConnection implements ServerConnection {
     }
 
     private Mono<Void> handlePublishSync(MqttPublishMessage msg) {
-        // 通知监听器有消息发布
-        Mono<Void> notifyMono = listener.onPublish(clientId, msg);
-
-        // 如果有自定义的publish handler，也调用它
+        // 如果有自定义的publish handler，调用它
         if (publishHandler != null) {
             try {
                 ReferenceCountUtil.retain(msg);
             } catch (Exception e) {
                 log.warning("Failed to retain message: " + e.getMessage());
                 ReferenceCountUtil.safeRelease(msg);
-                return notifyMono;
+                return Mono.empty();
             }
 
             DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, clientId, this::send);
@@ -250,50 +243,38 @@ public class DefaultServerConnection implements ServerConnection {
 
             if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
                 if (autoAck) {
-                    return notifyMono.then(handler).then(publishing.acknowledge())
-                                     .doFinally(signal -> publishing.release());
+                    return handler.then(publishing.acknowledge())
+                                    .doFinally(signal -> publishing.release());
                 } else {
-                    return notifyMono.then(handler).doFinally(signal -> publishing.release());
+                    return handler.doFinally(signal -> publishing.release());
                 }
             }
-            return notifyMono.then(handler).doFinally(signal -> publishing.release());
+            return handler.doFinally(signal -> publishing.release());
         }
 
-        return notifyMono;
+        return Mono.empty();
     }
 
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {
         DefaultMqttSubscription sub = new DefaultMqttSubscription(msg, this);
 
-        // 通知监听器订阅事件
-        Flux<Void> notifyFlux = Flux.fromIterable(msg.payload().topicSubscriptions())
-                                    .flatMap(topicSub -> listener.onSubscribe(clientId, topicSub.topicName()));
-
         if (subscribeHandler != null) {
-            return notifyFlux.then()
-                             .then(Mono.fromRunnable(() -> subscribeHandler.accept(sub)))
-                             .then(Mono.defer(() -> Mono.from(sub.acknowledge())));
+            return Mono.fromRunnable(() -> subscribeHandler.accept(sub))
+                       .then(Mono.defer(() -> Mono.from(sub.acknowledge())));
         }
 
-        return notifyFlux.then()
-                         .then(Mono.from(sub.acknowledge()));
+        return Mono.from(sub.acknowledge());
     }
 
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
         DefaultMqttUnsubscription unsub = new DefaultMqttUnsubscription(msg, this);
 
-        // 通知监听器取消订阅事件
-        Flux<Void> notifyFlux = Flux.fromIterable(msg.payload().topics())
-                                    .flatMap(topic -> listener.onUnsubscribe(clientId, topic));
-
         if (unsubscribeHandler != null) {
-            return notifyFlux.then()
-                             .then(Mono.fromRunnable(() -> unsubscribeHandler.accept(unsub)))
-                             .then(Mono.defer(() -> Mono.from(unsub.acknowledge())));
+            return Mono.fromRunnable(() -> unsubscribeHandler.accept(unsub))
+                       .then(Mono.defer(() -> Mono.from(unsub.acknowledge())));
         }
 
-        return notifyFlux.then()
-                         .then(Mono.from(unsub.acknowledge()));
+        return Mono.from(unsub.acknowledge());
     }
 
     private Mono<Void> handlePubRec(MqttMessageIdVariableHeader header) {
@@ -368,19 +349,16 @@ public class DefaultServerConnection implements ServerConnection {
                 return Mono.empty();
             }
 
-            // 通知监听器连接被接受
-            Mono<Void> notifyMono = listener.onConnectionAccepted(clientId, this);
-
             MqttConnAckMessage connAck = MqttMessageBuilders.connAck()
                                                             .returnCode(MqttConnectReturnCode.CONNECTION_ACCEPTED)
                                                             .sessionPresent(false)
                                                             .build();
-            return notifyMono.then(send(connAck))
-                             .doOnSuccess(v -> {
-                                 if (log.isLoggable(Level.FINE)) {
-                                     log.fine("MQTT client [" + clientId + "] connected");
-                                 }
-                             });
+            return send(connAck)
+                    .doOnSuccess(v -> {
+                        if (log.isLoggable(Level.FINE)) {
+                            log.fine("MQTT client [" + clientId + "] connected");
+                        }
+                    });
         });
     }
 

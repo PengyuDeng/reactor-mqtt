@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jetlinks.reactor.mqtt.server;
+package org.jetlinks.reactor.mqtt.broker;
 
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import org.jetlinks.reactor.mqtt.server.ServerConnection;
 import reactor.core.publisher.Mono;
 
 /**

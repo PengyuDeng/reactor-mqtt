@@ -281,16 +281,10 @@ public class DefaultClientConnection implements ClientConnection {
             return Mono.empty();
         }
 
-        log.log(Level.INFO, "Client received PUBLISH: topic=" + msg.variableHeader().topicName() + ", qos=" + msg
-                .fixedHeader()
-                .qosLevel());
-
         DefaultClientReceivedPublish publishing = new DefaultClientReceivedPublish(msg, this);
 
         // 委托给 SubscriptionManager 处理订阅匹配
         Mono<Void> handlerMono = subscriptionManager.handleMessage(publishing);
-
-        log.log(Level.INFO, "  Invoking subscription handlers...");
 
         // 全局处理器
         if (config.publishingHandler != null) {
@@ -303,7 +297,6 @@ public class DefaultClientConnection implements ClientConnection {
         }
 
         return handlerMono.doFinally(signal -> publishing.release())
-                          .doOnSuccess(v -> log.log(Level.INFO, "  Handlers completed successfully"))
                           .doOnError(error -> log.log(Level.SEVERE, "  Handler error", error));
     }
 
@@ -415,16 +408,12 @@ public class DefaultClientConnection implements ClientConnection {
                                                       })
                                                       .then(resubscribeIfNeeded())
                                 )
-                                .subscribe(
-                                        v -> {
-                                            clearFlag(RECONNECTING);
-                                            log.info("Reconnected successfully");
-                                        },
-                                        error -> {
-                                            clearFlag(RECONNECTING);
-                                            log.log(Level.WARNING, "Reconnect failed: " + error.getMessage());
-                                            attemptReconnect();
-                                        }
+                                .subscribe(v -> clearFlag(RECONNECTING),
+                                           error -> {
+                                               clearFlag(RECONNECTING);
+                                               log.log(Level.WARNING, "Reconnect failed: " + error.getMessage());
+                                               attemptReconnect();
+                                           }
                                 );
     }
 

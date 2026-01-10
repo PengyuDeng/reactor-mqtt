@@ -80,17 +80,13 @@ public class DefaultClientConnection implements ClientConnection {
     @SuppressWarnings("unused")
     private volatile int state = 0;
 
-    private static final VarHandle CONNECTION;
     private static final VarHandle STATE;
-    private static final VarHandle CONNACK_SINK;
     private static final VarHandle MESSAGE_ID_GENERATOR;
 
     static {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
-            CONNECTION = lookup.findVarHandle(DefaultClientConnection.class, "connection", Connection.class);
             STATE = lookup.findVarHandle(DefaultClientConnection.class, "state", int.class);
-            CONNACK_SINK = lookup.findVarHandle(DefaultClientConnection.class, "connAckSink", Sinks.One.class);
             MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultClientConnection.class, "messageIdGenerator", short.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
@@ -101,8 +97,10 @@ public class DefaultClientConnection implements ClientConnection {
     private static final int CONNECTED = 1;
     private static final int CLOSED = 2;
     private static final int RECONNECTING = 4;
-    private static final int FLAGS_MASK = 0x7;          // 低3位
-    private static final int ATTEMPT_INCREMENT = 0x8;   // 重连次数从 bit3 开始
+    // 低3位
+    private static final int FLAGS_MASK = 0x7;
+    // 重连次数从 bit3 开始
+    private static final int ATTEMPT_INCREMENT = 0x8;
 
     /**
      * 关闭完成信号,用于 onClose() 方法
@@ -110,9 +108,8 @@ public class DefaultClientConnection implements ClientConnection {
     private final Sinks.Empty<Void> closeSink = Sinks.empty();
 
     /**
-     * CONNACK 消息接收器,每次重连时重置,使用 VarHandle 保证可见性
+     * CONNACK 消息接收器,每次重连时重置
      */
-    @SuppressWarnings("unused")
     private volatile Sinks.One<MqttConnAckMessage> connAckSink = Sinks.one();
 
     /**
@@ -129,12 +126,7 @@ public class DefaultClientConnection implements ClientConnection {
     /**
      * 订阅管理器,统一管理订阅和处理器
      */
-    private final SubscriptionManager subscriptionManager = SubscriptionManager.create();
-
-    /**
-     * 接收到的消息流,支持多个订阅者
-     */
-    private final Sinks.Many<ClientReceivedPublish> messageSink = Sinks.many().multicast().onBackpressureBuffer();
+    private final SubscriptionManager subscriptionManager;
 
     public DefaultClientConnection(Connection connection,
                                    String clientId,
@@ -152,7 +144,8 @@ public class DefaultClientConnection implements ClientConnection {
                                    Supplier<TcpClient> tcpClientSupplier,
                                    Duration subscribeTimeout,
                                    Duration unsubscribeTimeout,
-                                   Duration publishTimeout) {
+                                   Duration publishTimeout,
+                                   SubscriptionManager subscriptionManager) {
 
         this.connection = connection;
         this.config = new ConnectionConfig(clientId, username, password, keepAliveSeconds, cleanSession, protocolVersion,
@@ -160,6 +153,9 @@ public class DefaultClientConnection implements ClientConnection {
                                            reconnectStrategy, autoResubscribe,
                                            subscribeTimeout, unsubscribeTimeout, publishTimeout);
         this.tcpClientSupplier = tcpClientSupplier;
+        this.subscriptionManager = subscriptionManager != null
+                ? subscriptionManager
+                : SubscriptionManager.create();
     }
 
     private static int pendingKey(MqttMessageType type, int messageId) {
@@ -285,12 +281,11 @@ public class DefaultClientConnection implements ClientConnection {
             return Mono.empty();
         }
 
-        log.log(Level.INFO, "Client received PUBLISH: topic=" + msg.variableHeader().topicName() + ", qos=" + msg.fixedHeader().qosLevel());
+        log.log(Level.INFO, "Client received PUBLISH: topic=" + msg.variableHeader().topicName() + ", qos=" + msg
+                .fixedHeader()
+                .qosLevel());
 
         DefaultClientReceivedPublish publishing = new DefaultClientReceivedPublish(msg, this);
-
-        // 发送到消息流
-        messageSink.tryEmitNext(publishing);
 
         // 委托给 SubscriptionManager 处理订阅匹配
         Mono<Void> handlerMono = subscriptionManager.handleMessage(publishing);
@@ -612,7 +607,6 @@ public class DefaultClientConnection implements ClientConnection {
                 return Mono.empty();
             }
             clearFlag(CONNECTED);
-            messageSink.tryEmitComplete();
 
             if (connection != null) {
                 connection.dispose();

@@ -239,6 +239,20 @@ public interface MqttClient {
     MqttClient publishTimeout(Duration timeout);
 
     /**
+     * 设置订阅管理器
+     *
+     * <p>允许用户自定义订阅管理器实现，或选择不同的内置实现：</p>
+     * <ul>
+     *     <li>{@link SubscriptionManager#create()} - 默认实现，适合少量订阅</li>
+     *     <li>{@link SubscriptionManager#createTrieBased()} - 基于Trie树的高性能实现，适合大量订阅</li>
+     * </ul>
+     *
+     * @param subscriptionManager 订阅管理器实例
+     * @return 当前实例
+     */
+    MqttClient subscriptionManager(SubscriptionManager subscriptionManager);
+
+    /**
      * 阻塞并连接到服务器
      *
      * @return 连接实例

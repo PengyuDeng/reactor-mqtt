@@ -61,6 +61,7 @@ class DefaultMqttClient implements MqttClient {
     private Duration subscribeTimeout = Duration.ofSeconds(10);
     private Duration unsubscribeTimeout = Duration.ofSeconds(10);
     private Duration publishTimeout = Duration.ofSeconds(30);
+    private SubscriptionManager subscriptionManager;
 
     DefaultMqttClient() {
     }
@@ -219,6 +220,12 @@ class DefaultMqttClient implements MqttClient {
     }
 
     @Override
+    public MqttClient subscriptionManager(SubscriptionManager subscriptionManager) {
+        this.subscriptionManager = subscriptionManager;
+        return this;
+    }
+
+    @Override
     public Mono<ClientConnection> connect() {
         String actualClientId = clientId != null ? clientId :
                 "reactor-mqtt-" + UUID.randomUUID().toString().substring(0, 8);
@@ -266,7 +273,8 @@ class DefaultMqttClient implements MqttClient {
                                     tcpClientSupplier,
                                     subscribeTimeout,
                                     unsubscribeTimeout,
-                                    publishTimeout
+                                    publishTimeout,
+                                    subscriptionManager
                             );
                             return mqttConn.initialize();
                         });

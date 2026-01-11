@@ -36,6 +36,18 @@ public interface ReceivedPublish extends Acknowledge {
     String getTopic();
 
     /**
+     * 获取预解析的主题层级数组
+     *
+     * <p>此方法用于优化性能，避免重复调用 split()。
+     * 实现类应该缓存解析结果。</p>
+     *
+     * @return 主题层级数组（只读，请勿修改）
+     */
+    default String[] getTopicLevels() {
+        return ParsedTopic.parse(getTopic()).getLevels();
+    }
+
+    /**
      * 获取消息负载
      *
      * @return 负载数据

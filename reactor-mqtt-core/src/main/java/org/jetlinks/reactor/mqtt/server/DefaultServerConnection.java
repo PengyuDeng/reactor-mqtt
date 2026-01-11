@@ -79,28 +79,28 @@ public class DefaultServerConnection implements ServerConnection {
     private final NettyInbound inbound;
     private final NettyOutbound outbound;
 
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile String clientId = "unknown";
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile MqttConnectMessage connectMessage;
 
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile byte state = State.INIT;
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile long lastPingTime;
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile long keepAliveTimeoutMs = 120_000L;
 
     private final Sinks.One<MqttConnectMessage> connectSink = Sinks.one();
     private final Sinks.Empty<Void> disposeSink = Sinks.empty();
 
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile Consumer<ServerReceivedPublish> publishHandler;
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile Consumer<MqttSubscription> subscribeHandler;
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile Consumer<MqttUnsubscription> unsubscribeHandler;
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile boolean autoAck = true;
 
     private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
@@ -112,6 +112,20 @@ public class DefaultServerConnection implements ServerConnection {
         this.outbound = outbound;
         this.connection = (Connection) inbound;
         LAST_PING_TIME.set(this, System.currentTimeMillis());
+
+        // 启动 KeepAlive 超时检测
+        Flux.interval(Duration.ofSeconds(30))
+            .takeUntil(v -> !isAlive())
+            .subscribe(tick -> {
+                long now = System.currentTimeMillis();
+                long lastPing = getLastPingTime();
+                long timeout = (long) KEEP_ALIVE_TIMEOUT_MS.get(this);
+
+                if (now - lastPing > timeout) {
+                    log.warning("Client " + clientId + " keepalive timeout, closing connection");
+                    close().subscribe();
+                }
+            });
 
         connection.onDispose(() -> {
             if (casSetClosed()) {
@@ -244,7 +258,7 @@ public class DefaultServerConnection implements ServerConnection {
             if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
                 if (autoAck) {
                     return handler.then(publishing.acknowledge())
-                                    .doFinally(signal -> publishing.release());
+                                  .doFinally(signal -> publishing.release());
                 } else {
                     return handler.doFinally(signal -> publishing.release());
                 }

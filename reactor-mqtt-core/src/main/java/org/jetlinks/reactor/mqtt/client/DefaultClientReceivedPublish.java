@@ -18,6 +18,7 @@ package org.jetlinks.reactor.mqtt.client;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
+import org.jetlinks.reactor.mqtt.ParsedTopic;
 import reactor.core.publisher.Mono;
 
 import java.lang.invoke.MethodHandles;
@@ -34,6 +35,9 @@ class DefaultClientReceivedPublish implements ClientReceivedPublish {
     private final DefaultClientConnection connection;
     private volatile boolean acknowledged = false;
     private volatile boolean released = false;
+
+    // 新增：缓存解析后的主题层级
+    private volatile String[] cachedTopicLevels;
 
     private static final VarHandle ACKNOWLEDGED;
     private static final VarHandle RELEASED;
@@ -56,6 +60,24 @@ class DefaultClientReceivedPublish implements ClientReceivedPublish {
     @Override
     public String getTopic() {
         return message.variableHeader().topicName();
+    }
+
+    @Override
+    public String[] getTopicLevels() {
+        // 使用局部变量减少 volatile 读取
+        String[] levels = cachedTopicLevels;
+        if (levels == null) {
+            // 双检锁 + 零分配路径
+            synchronized (this) {
+                levels = cachedTopicLevels;
+                if (levels == null) {
+                    // 使用 ParsedTopic 的字符串去重池
+                    levels = ParsedTopic.parse(getTopic()).getLevels();
+                    cachedTopicLevels = levels;
+                }
+            }
+        }
+        return levels;
     }
 
     @Override

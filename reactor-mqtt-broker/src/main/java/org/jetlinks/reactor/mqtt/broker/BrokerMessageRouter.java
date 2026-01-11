@@ -19,6 +19,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttMessageBuilders;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
+import org.jetlinks.reactor.mqtt.ParsedTopic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import org.jetlinks.reactor.mqtt.server.ServerConnection;
 import reactor.core.publisher.Flux;
@@ -136,7 +137,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param topic    订阅的主题（可能包含通配符）
      */
     private void addSubscription(String clientId, String topic) {
-        subscriptionTrie.addSubscription(topic, clientId);
+        subscriptionTrie.addSubscription(ParsedTopic.parse(topic).getLevels(), clientId);
         log.log(Level.FINE, "Client " + clientId + " subscribed to: " + topic);
     }
 
@@ -147,7 +148,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param topic    要取消订阅的主题
      */
     private void removeSubscription(String clientId, String topic) {
-        subscriptionTrie.removeSubscription(topic, clientId);
+        subscriptionTrie.removeSubscription(ParsedTopic.parse(topic).getLevels(), clientId);
         log.log(Level.FINE, "Client " + clientId + " unsubscribed from: " + topic);
     }
 
@@ -165,7 +166,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      */
     private Mono<Void> publish(String publisherClientId, String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
         // 使用 Trie 树快速查找所有匹配的订阅者 - O(L) 复杂度
-        Set<String> matchedClients = subscriptionTrie.findMatches(topic);
+        Set<String> matchedClients = subscriptionTrie.findMatches(ParsedTopic.parse(topic).getLevels());
 
         if (matchedClients.isEmpty()) {
             log.log(Level.FINE, "No subscribers for topic: " + topic);
@@ -182,21 +183,19 @@ class BrokerMessageRouter implements ServerConnectionListener {
                            return Mono.empty();
                        }
 
-                       // 使用 Mono.using 保证 ByteBuf 正确释放，防止内存泄漏
-                       return Mono.using(
-                               () -> payload.retainedDuplicate(),              // 资源获取
-                               clientPayload -> {                              // 资源使用
-                                   int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : 1;
-                                   MqttPublishMessage publishMessage = MqttMessageBuilders.publish()
-                                                                                          .topicName(topic)
-                                                                                          .payload(clientPayload)
-                                                                                          .qos(qos)
-                                                                                          .retained(retain)
-                                                                                          .messageId(messageId)
-                                                                                          .build();
-                                   return connection.publish(publishMessage);
-                               },
-                               ByteBuf::release                                // 资源释放（保证执行）
+                       return Mono.using(payload::retainedDuplicate,
+                                         clientPayload -> {
+                                             int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : 1;
+                                             MqttPublishMessage publishMessage = MqttMessageBuilders.publish()
+                                                                                                    .topicName(topic)
+                                                                                                    .payload(clientPayload)
+                                                                                                    .qos(qos)
+                                                                                                    .retained(retain)
+                                                                                                    .messageId(messageId)
+                                                                                                    .build();
+                                             return connection.publish(publishMessage);
+                                         },
+                                         ByteBuf::release
                        ).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
                    })
                    .then();

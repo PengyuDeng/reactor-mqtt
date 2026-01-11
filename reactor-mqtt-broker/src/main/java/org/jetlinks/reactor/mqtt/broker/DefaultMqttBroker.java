@@ -15,19 +15,14 @@
  */
 package org.jetlinks.reactor.mqtt.broker;
 
-import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.ssl.SslContext;
 import org.jetlinks.reactor.mqtt.server.DefaultMqttServer;
-import org.jetlinks.reactor.mqtt.server.ServerConnection;
 import org.reactivestreams.Publisher;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 import reactor.netty.NettyInbound;
 import reactor.netty.NettyOutbound;
 import reactor.netty.resources.LoopResources;
 
 import java.time.Duration;
-import java.util.function.Function;
 
 /**
  * MQTT Broker 默认实现
@@ -114,8 +109,7 @@ class DefaultMqttBroker extends DefaultMqttServer implements MqttBroker {
     @Override
     protected Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
         // 覆写父类的 handle 方法，使用 BrokerServerConnection 注入消息路由功能
-        BrokerServerConnection brokerConnection = new BrokerServerConnection(inbound, outbound, router);
-        return brokerConnection.run(conn -> super.invokeHandler(conn));
+        return new BrokerServerConnection(inbound, outbound, router).run(super::invokeHandler);
     }
 
     @Override

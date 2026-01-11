@@ -16,6 +16,7 @@
 package org.jetlinks.reactor.mqtt.client;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
+import org.jetlinks.reactor.mqtt.ParsedTopic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -23,7 +24,6 @@ import reactor.core.publisher.Mono;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -46,7 +46,6 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
     private static final Logger log = Logger.getLogger(TrieBasedSubscriptionManager.class.getName());
 
     // 使用通用 TopicTrie 管理订阅，存储 SubscriptionHandlers 对象
-    // 使用 CopyOnWriteArraySet 确保同一个 SubscriptionHandlers 只被存储一次
     private final TopicTrie<SubscriptionHandlers> trie = new TopicTrie<>();
     // 用于快速查找和清理
     private final Map<String, SubscriptionHandlers> subscriptionsMap = new ConcurrentHashMap<>();
@@ -64,7 +63,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                 k -> {
                     SubscriptionHandlers h = new SubscriptionHandlers(topicStr, qos, connection);
                     // 将订阅添加到通用 TopicTrie
-                    trie.addSubscription(topicStr, h);
+                    trie.addSubscription(ParsedTopic.parse(topicStr).getLevels(), h);
                     return h;
                 }
         );
@@ -73,16 +72,17 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         return handlers.addHandler(handler, () -> {
             // 当最后一个处理器被移除时，从 Trie 和 Map 中删除
             subscriptionsMap.remove(topicStr);
-            trie.removeSubscription(topicStr, handlers);
+            trie.removeSubscription(ParsedTopic.parse(topicStr).getLevels(), handlers);
         });
     }
 
     @Override
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
-        String topic = publishing.getTopic();
+        // 使用预解析的层级数组，避免重复 split
+        String[] topicLevels = publishing.getTopicLevels();
 
         // 使用通用 TopicTrie 快速查找匹配的订阅
-        Set<SubscriptionHandlers> matchedHandlers = trie.findMatches(topic);
+        Set<SubscriptionHandlers> matchedHandlers = trie.findMatches(topicLevels);
 
         // 并行处理所有匹配的订阅
         return Flux.fromIterable(matchedHandlers)
@@ -114,7 +114,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
     /**
      * 订阅处理器容器，支持同一主题多个处理器
      */
-    private class SubscriptionHandlers {
+    private static class SubscriptionHandlers {
         private static final VarHandle SUBSCRIBED;
 
         static {
@@ -130,7 +130,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         private final MqttQoS qos;
         private final ClientConnection connection;
         private final List<HandlerEntry> handlers = new CopyOnWriteArrayList<>();
-        @SuppressWarnings("unused") // accessed via VarHandle
+        @SuppressWarnings("unused")
         private volatile boolean subscribed = false;
 
         SubscriptionHandlers(String topic, MqttQoS qos, ClientConnection connection) {
@@ -142,8 +142,8 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         /**
          * 添加处理器
          *
-         * @param handler        消息处理器
-         * @param onLastRemoved  当最后一个处理器被移除时的回调
+         * @param handler       消息处理器
+         * @param onLastRemoved 当最后一个处理器被移除时的回调
          * @return Disposable 用于移除此处理器
          */
         Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler, Runnable onLastRemoved) {
@@ -154,11 +154,12 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
             if (SUBSCRIBED.compareAndSet(this, false, true)) {
                 // 首次订阅，发送 SUBSCRIBE 消息到服务器
                 if (connection instanceof DefaultClientConnection) {
-                    ((DefaultClientConnection) connection).doSubscribe(topic, qos)
-                        .subscribe(
-                            v -> log.log(Level.FINE, "Successfully subscribed to topic: " + topic),
-                            error -> log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error)
-                        );
+                    ((DefaultClientConnection) connection)
+                            .doSubscribe(topic, qos)
+                            .subscribe(
+                                    v -> log.log(Level.FINE, "Successfully subscribed to topic: " + topic),
+                                    error -> log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error)
+                            );
                 }
             }
 
@@ -182,13 +183,13 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         Mono<Void> handle(ClientReceivedPublish publishing) {
             return Flux.fromIterable(handlers)
                        .flatMap(entry -> entry.handler.apply(publishing)
-                                     .onErrorResume(error -> {
-                                         log.log(Level.WARNING,
-                                                String.format("Handler error for topic [%s]: %s",
-                                                            topic, error.getMessage()),
-                                                error);
-                                         return Mono.empty();
-                                     }))
+                                                      .onErrorResume(error -> {
+                                                          log.log(Level.WARNING,
+                                                                  String.format("Handler error for topic [%s]: %s",
+                                                                                topic, error.getMessage()),
+                                                                  error);
+                                                          return Mono.empty();
+                                                      }))
                        .then();
         }
 
@@ -204,8 +205,8 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                             // 只记录非超时错误
                             if (!(error instanceof java.util.concurrent.TimeoutException)) {
                                 log.log(Level.WARNING,
-                                       "Failed to unsubscribe from topic: " + topic,
-                                       error);
+                                        "Failed to unsubscribe from topic: " + topic,
+                                        error);
                             }
                         }
                 );

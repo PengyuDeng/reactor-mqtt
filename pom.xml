@@ -22,6 +22,7 @@
         <netty.version>4.2.9.Final</netty.version>
         <reactor.version>2025.0.1</reactor.version>
         <slf4j.version>2.0.7</slf4j.version>
+        <caffeine.version>3.2.3</caffeine.version>
     </properties>
 
     <dependencyManagement>
@@ -40,6 +41,12 @@
                 <version>${reactor.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.github.ben-manes.caffeine</groupId>
+                <artifactId>caffeine</artifactId>
+                <version>${caffeine.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

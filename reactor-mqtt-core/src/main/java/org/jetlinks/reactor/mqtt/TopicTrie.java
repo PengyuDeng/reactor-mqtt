@@ -18,6 +18,7 @@ package org.jetlinks.reactor.mqtt;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Supplier;
 
 /**
@@ -61,11 +62,15 @@ public class TopicTrie<T> {
     private final TrieNode<T> root;
     private final Supplier<Collection<T>> collectionFactory;
 
+    // 新增：ThreadLocal 集合池，减少 GC 压力
+    private static final ThreadLocal<MatchResultPool> RESULT_POOL =
+        ThreadLocal.withInitial(MatchResultPool::new);
+
     /**
      * 创建一个新的 TopicTrie，使用 CopyOnWriteArraySet 存储订阅者（适合读多写少）
      */
     public TopicTrie() {
-        this(() -> new java.util.concurrent.CopyOnWriteArraySet<>());
+        this(CopyOnWriteArraySet::new);
     }
 
     /**
@@ -81,19 +86,22 @@ public class TopicTrie<T> {
     /**
      * 添加订阅
      *
-     * @param topic        订阅主题（可包含通配符 +, #）
+     * @param levels       主题层级数组（请勿在调用后修改）
      * @param subscription 订阅数据
      * @throws IllegalArgumentException 如果主题格式非法
      */
-    public void addSubscription(String topic, T subscription) {
-        if (topic == null || topic.isEmpty()) {
-            throw new IllegalArgumentException("Topic must not be null or empty");
+    public void addSubscription(String[] levels, T subscription) {
+        if (levels == null || levels.length == 0) {
+            throw new IllegalArgumentException("Topic levels must not be null or empty");
         }
         if (subscription == null) {
             throw new IllegalArgumentException("Subscription must not be null");
         }
 
-        String[] levels = topic.split(LEVEL_SEPARATOR);
+        if (levels.length == 1 && levels[0].isEmpty()) {
+            throw new IllegalArgumentException("Topic must not be empty");
+        }
+
         TrieNode<T> current = root;
 
         for (int i = 0; i < levels.length; i++) {
@@ -101,7 +109,7 @@ public class TopicTrie<T> {
 
             if (MULTI_WILDCARD.equals(level)) {
                 if (i != levels.length - 1) {
-                    throw new IllegalArgumentException("# wildcard must be the last level in topic: " + topic);
+                    throw new IllegalArgumentException("# wildcard must be the last level");
                 }
                 if (current.hashWildcard == null) {
                     current.hashWildcard = new TrieNode<>(collectionFactory);
@@ -114,7 +122,7 @@ public class TopicTrie<T> {
                 }
                 current = current.plusWildcard;
             } else {
-                current = current.children.computeIfAbsent(level, k -> new TrieNode<>(collectionFactory));
+                current = current.getChildren().computeIfAbsent(level, k -> new TrieNode<>(collectionFactory));
             }
         }
 
@@ -124,16 +132,15 @@ public class TopicTrie<T> {
     /**
      * 移除订阅
      *
-     * @param topic        订阅主题
+     * @param levels       主题层级数组
      * @param subscription 订阅数据
      * @return true 如果成功移除
      */
-    public boolean removeSubscription(String topic, T subscription) {
-        if (topic == null || topic.isEmpty() || subscription == null) {
+    public boolean removeSubscription(String[] levels, T subscription) {
+        if (levels == null || levels.length == 0 || subscription == null) {
             return false;
         }
 
-        String[] levels = topic.split(LEVEL_SEPARATOR);
         boolean[] removed = new boolean[1];
         removeSubscriptionRecursive(root, levels, 0, subscription, removed);
         return removed[0];
@@ -170,7 +177,7 @@ public class TopicTrie<T> {
                 }
             }
         } else {
-            TrieNode<T> child = node.children.get(level);
+            TrieNode<T> child = node.children != null ? node.children.get(level) : null;
             if (child != null) {
                 boolean shouldDelete = removeSubscriptionRecursive(child, levels, depth + 1, subscription, removed);
                 if (shouldDelete) {
@@ -185,18 +192,32 @@ public class TopicTrie<T> {
     /**
      * 查找匹配指定发布主题的所有订阅
      *
-     * @param publishTopic 发布的主题（不含通配符）
-     * @return 匹配的订阅数据集合
+     * <p>使用 ThreadLocal 集合复用，减少 GC 压力</p>
+     *
+     * @param levels 发布主题的层级数组
+     * @return 匹配的订阅数据集合（只读）
      */
-    public Set<T> findMatches(String publishTopic) {
-        if (publishTopic == null || publishTopic.isEmpty()) {
+    public Set<T> findMatches(String[] levels) {
+        if (levels == null || levels.length == 0) {
             return Collections.emptySet();
         }
 
-        String[] levels = publishTopic.split(LEVEL_SEPARATOR);
-        Set<T> result = new HashSet<>();
-        findMatchesRecursive(root, levels, 0, result);
-        return result;
+        // 从 ThreadLocal 池获取可复用的集合
+        MatchResultPool pool = RESULT_POOL.get();
+        Set<T> workingSet = pool.acquire();
+
+        try {
+            workingSet.clear();  // 清空上次的结果
+            findMatchesRecursive(root, levels, 0, workingSet);
+
+            // 返回不可变副本（调用方可以安全持有）
+            return workingSet.isEmpty()
+                ? Collections.emptySet()
+                : Collections.unmodifiableSet(new HashSet<>(workingSet));
+        } finally {
+            // 归还到池中（不清空，下次使用时再清空）
+            pool.release(workingSet);
+        }
     }
 
     /**
@@ -217,7 +238,7 @@ public class TopicTrie<T> {
 
         String level = levels[depth];
 
-        TrieNode<T> exactNode = node.children.get(level);
+        TrieNode<T> exactNode = node.children != null ? node.children.get(level) : null;
         if (exactNode != null) {
             findMatchesRecursive(exactNode, levels, depth + 1, result);
         }
@@ -245,8 +266,10 @@ public class TopicTrie<T> {
     private void removeAllRecursive(TrieNode<T> node, T subscription) {
         node.subscriptions.remove(subscription);
 
-        for (TrieNode<T> child : node.children.values()) {
-            removeAllRecursive(child, subscription);
+        if (node.children != null) {
+            for (TrieNode<T> child : node.children.values()) {
+                removeAllRecursive(child, subscription);
+            }
         }
 
         if (node.plusWildcard != null) {
@@ -261,15 +284,14 @@ public class TopicTrie<T> {
     /**
      * 获取指定主题的订阅者数量
      *
-     * @param topic 订阅主题
+     * @param levels 订阅主题的层级数组
      * @return 订阅者数量
      */
-    public int getSubscriberCount(String topic) {
-        if (topic == null || topic.isEmpty()) {
+    public int getSubscriberCount(String[] levels) {
+        if (levels == null || levels.length == 0) {
             return 0;
         }
 
-        String[] levels = topic.split(LEVEL_SEPARATOR);
         TrieNode<T> current = root;
 
         for (String level : levels) {
@@ -279,7 +301,7 @@ public class TopicTrie<T> {
             } else if (SINGLE_WILDCARD.equals(level)) {
                 current = current.plusWildcard;
             } else {
-                current = current.children.get(level);
+                current = current.children != null ? current.children.get(level) : null;
             }
 
             if (current == null) {
@@ -302,8 +324,10 @@ public class TopicTrie<T> {
     private int countSubscriptionsRecursive(TrieNode<T> node) {
         int count = node.subscriptions.size();
 
-        for (TrieNode<T> child : node.children.values()) {
-            count += countSubscriptionsRecursive(child);
+        if (node.children != null) {
+            for (TrieNode<T> child : node.children.values()) {
+                count += countSubscriptionsRecursive(child);
+            }
         }
 
         if (node.plusWildcard != null) {
@@ -321,30 +345,77 @@ public class TopicTrie<T> {
      * 清空所有订阅
      */
     public void clear() {
-        root.children.clear();
+        if (root.children != null) {
+            root.children.clear();
+        }
         root.plusWildcard = null;
         root.hashWildcard = null;
         root.subscriptions.clear();
     }
 
     /**
-     * Trie 树节点
+     * Trie 树节点 - 极致内存优化版本
+     *
+     * <h3>内存优化策略</h3>
+     * <ul>
+     *   <li>懒加载 children Map：只有在需要时才创建</li>
+     *   <li>使用 computeIfAbsent 避免不必要的 Map 创建</li>
+     *   <li>空节点自动清理，避免内存泄漏</li>
+     * </ul>
      */
     private static class TrieNode<T> {
-        final Map<String, TrieNode<T>> children = new ConcurrentHashMap<>();
+        // 懒加载：只有在有子节点时才创建 Map
+        Map<String, TrieNode<T>> children;
         TrieNode<T> plusWildcard;
         TrieNode<T> hashWildcard;
         final Collection<T> subscriptions;
 
         TrieNode(Supplier<Collection<T>> collectionFactory) {
             this.subscriptions = collectionFactory.get();
+            // children 延迟初始化 - 节省内存
+            this.children = null;
+        }
+
+        /**
+         * 获取或创建子节点 Map
+         */
+        Map<String, TrieNode<T>> getChildren() {
+            if (children == null) {
+                children = new ConcurrentHashMap<>();
+            }
+            return children;
         }
 
         boolean isEmpty() {
             return subscriptions.isEmpty() &&
-                   children.isEmpty() &&
+                   (children == null || children.isEmpty()) &&
                    plusWildcard == null &&
                    hashWildcard == null;
+        }
+    }
+
+    /**
+     * ThreadLocal 结果集池
+     */
+    private static class MatchResultPool {
+        private final Set<?> reusableSet = new HashSet<>();
+        private boolean inUse = false;
+
+        @SuppressWarnings("unchecked")
+        <T> Set<T> acquire() {
+            if (inUse) {
+                // 嵌套调用时创建新集合（罕见情况）
+                return new HashSet<>();
+            }
+            inUse = true;
+            return (Set<T>) reusableSet;
+        }
+
+        void release(Set<?> set) {
+            if (set == reusableSet) {
+                inUse = false;
+            }
+            // 如果是临时创建的集合，直接丢弃（GC 回收）
         }
     }
 }

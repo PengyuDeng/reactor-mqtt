@@ -134,8 +134,12 @@ class DefaultSubscriptionManager implements SubscriptionManager {
                 if (connection instanceof DefaultClientConnection) {
                     ((DefaultClientConnection) connection).doSubscribe(topic, qos)
                         .subscribe(
-                            v -> log.log(Level.FINE, "Successfully subscribed to topic: " + topic),
-                            error -> log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error)
+                            v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
+                            error -> {
+                                if (log.isLoggable(Level.WARNING)) {
+                                    log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error);
+                                }
+                            }
                         );
                 }
             }
@@ -159,10 +163,12 @@ class DefaultSubscriptionManager implements SubscriptionManager {
             return Flux.fromIterable(handlers)
                        .flatMap(h -> h.apply(publishing)
                                       .onErrorResume(error -> {
-                                          log.log(Level.WARNING,
-                                                  String.format("Handler error for topic [%s]: %s",
-                                                                topic, error.getMessage()),
-                                                  error);
+                                          if (log.isLoggable(Level.WARNING)) {
+                                              log.log(Level.WARNING,
+                                                      String.format("Handler error for topic [%s]: %s",
+                                                                    topic, error.getMessage()),
+                                                      error);
+                                          }
                                           return Mono.empty();
                                       }))
                        .then();
@@ -179,9 +185,9 @@ class DefaultSubscriptionManager implements SubscriptionManager {
                         error -> {
                             // 只记录非超时错误，连接关闭时的超时是正常的
                             if (!(error instanceof java.util.concurrent.TimeoutException)) {
-                                log.log(Level.WARNING,
-                                        "Failed to unsubscribe from topic: " + topic,
-                                        error);
+                                if (log.isLoggable(Level.WARNING)) {
+                                    log.log(Level.WARNING, "Failed to unsubscribe from topic: " + topic, error);
+                                }
                             }
                         }
                 );

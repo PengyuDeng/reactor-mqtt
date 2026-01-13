@@ -157,8 +157,12 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                     ((DefaultClientConnection) connection)
                             .doSubscribe(topic, qos)
                             .subscribe(
-                                    v -> log.log(Level.FINE, "Successfully subscribed to topic: " + topic),
-                                    error -> log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error)
+                                    v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
+                                    error -> {
+                                        if (log.isLoggable(Level.WARNING)) {
+                                            log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error);
+                                        }
+                                    }
                             );
                 }
             }
@@ -184,10 +188,12 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
             return Flux.fromIterable(handlers)
                        .flatMap(entry -> entry.handler.apply(publishing)
                                                       .onErrorResume(error -> {
-                                                          log.log(Level.WARNING,
-                                                                  String.format("Handler error for topic [%s]: %s",
-                                                                                topic, error.getMessage()),
-                                                                  error);
+                                                          if (log.isLoggable(Level.WARNING)) {
+                                                              log.log(Level.WARNING,
+                                                                      String.format("Handler error for topic [%s]: %s",
+                                                                                    topic, error.getMessage()),
+                                                                      error);
+                                                          }
                                                           return Mono.empty();
                                                       }))
                        .then();
@@ -204,9 +210,9 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                         error -> {
                             // 只记录非超时错误
                             if (!(error instanceof java.util.concurrent.TimeoutException)) {
-                                log.log(Level.WARNING,
-                                        "Failed to unsubscribe from topic: " + topic,
-                                        error);
+                                if (log.isLoggable(Level.WARNING)) {
+                                    log.log(Level.WARNING, "Failed to unsubscribe from topic: " + topic, error);
+                                }
                             }
                         }
                 );

@@ -224,7 +224,7 @@ public class DefaultMqttServer implements MqttServer {
         return authenticator.authenticate(serverConnection)
                             .flatMap(authenticated -> {
                                 if (!authenticated) {
-                                    log.log(Level.WARNING, "Client " + serverConnection.getClientId() + " authentication failed");
+                                    log.log(Level.WARNING, () -> "Client " + serverConnection.getClientId() + " authentication failed");
                                     return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD);
                                 }
 
@@ -234,7 +234,9 @@ public class DefaultMqttServer implements MqttServer {
                                 }
                                 return connectionHandler.apply(serverConnection)
                                                         .onErrorResume(err -> {
-                                                            log.log(Level.SEVERE, "处理 MQTT 连接时出错: " + err.getMessage(), err);
+                                                            if (log.isLoggable(Level.SEVERE)) {
+                                                                log.log(Level.SEVERE, "Error handling MQTT connection for client " + serverConnection.getClientId() + ": " + err.getMessage(), err);
+                                                            }
                                                             return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
                                                         });
                             });

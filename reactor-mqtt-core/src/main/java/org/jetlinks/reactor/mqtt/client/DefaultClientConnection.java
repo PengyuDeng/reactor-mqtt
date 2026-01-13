@@ -182,7 +182,9 @@ public class DefaultClientConnection implements ClientConnection {
                 connection.addHandlerFirst("mqttDecoder", new MqttDecoder(8096));
             }
         } catch (Exception e) {
-            log.log(Level.WARNING, "Failed to add MQTT codec: " + e.getMessage(), e);
+            if (log.isLoggable(Level.WARNING)) {
+                log.log(Level.WARNING, "Failed to add MQTT codec: " + e.getMessage(), e);
+            }
         }
     }
 
@@ -270,7 +272,7 @@ public class DefaultClientConnection implements ClientConnection {
     private Mono<Void> handleConnAck(MqttConnAckMessage msg) {
         Sinks.EmitResult result = connAckSink.tryEmitValue(msg);
         if (result.isFailure()) {
-            log.log(Level.WARNING, "Failed to emit CONNACK: " + result + ", this should not happen after reconnect fix");
+            log.log(Level.WARNING, () -> "Failed to emit CONNACK: " + result + ", this should not happen after reconnect fix");
         }
         return Mono.empty();
     }
@@ -367,7 +369,9 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     private void handleError(Throwable error) {
-        log.log(Level.WARNING, "Connection error: " + error.getMessage(), error);
+        if (log.isLoggable(Level.WARNING)) {
+            log.log(Level.WARNING, "Connection error for client " + config.clientId + ": " + error.getMessage(), error);
+        }
         handleDisconnect();
     }
 
@@ -413,12 +417,12 @@ public class DefaultClientConnection implements ClientConnection {
                                         v -> clearFlag(RECONNECTING),
                                         error -> {
                                             clearFlag(RECONNECTING);
-                                            log.log(Level.WARNING, "Reconnect failed: " + error.getMessage());
+                                            log.log(Level.WARNING, () -> "Reconnect failed for client " + config.clientId + ": " + error.getMessage());
                                             attemptReconnect();
                                         },
                                         () -> {
                                             clearFlag(RECONNECTING);
-                                            log.log(Level.WARNING, "Max reconnect attempts reached for client " + config.clientId + ", closing connection");
+                                            log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.clientId + ", closing connection");
                                             close().subscribe();
                                         }
                                 );

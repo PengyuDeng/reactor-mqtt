@@ -46,7 +46,7 @@ class SimpleMqttAuthenticator implements MqttAuthenticator {
 
             // 检查是否提供了认证信息
             if (auth == null || !auth.hasAuth()) {
-                log.log(Level.WARNING, "Client " + connection.getClientId() + " authentication failed: no credentials provided");
+                log.log(Level.WARNING, () -> "Client " + connection.getClientId() + " authentication failed: no credentials provided");
                 return false;
             }
 
@@ -55,9 +55,9 @@ class SimpleMqttAuthenticator implements MqttAuthenticator {
                            && Objects.equals(password, auth.getPassword());
 
             if (!isValid) {
-                log.log(Level.WARNING, "Client " + connection.getClientId() + " authentication failed: invalid credentials");
+                log.log(Level.WARNING, () -> "Client " + connection.getClientId() + " authentication failed: invalid credentials");
             } else {
-                log.log(Level.FINE, "Client " + connection.getClientId() + " authenticated successfully");
+                log.log(Level.FINE, () -> "Client " + connection.getClientId() + " authenticated successfully");
             }
 
             return isValid;

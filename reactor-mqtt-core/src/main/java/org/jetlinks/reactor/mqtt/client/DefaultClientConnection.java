@@ -87,7 +87,7 @@ public class DefaultClientConnection implements ClientConnection {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             STATE = lookup.findVarHandle(DefaultClientConnection.class, "state", int.class);
-            MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultClientConnection.class, "messageIdGenerator", short.class);
+            MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultClientConnection.class, "messageIdGenerator", int.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -113,10 +113,11 @@ public class DefaultClientConnection implements ClientConnection {
     private volatile Sinks.One<MqttConnAckMessage> connAckSink = Sinks.one();
 
     /**
-     * MQTT 消息 ID 生成器,范围 1-65535,循环使用
+     * MQTT 消息 ID 生成器,使用 VarHandle 保证原子性和可见性
+     * 范围 1-65535,循环使用
      */
     @SuppressWarnings("unused")
-    private volatile short messageIdGenerator = 0;
+    private volatile int messageIdGenerator = 0;
 
     /**
      * 统一的 pending 消息映射: key = (MqttMessageType.ordinal << 16) | messageId
@@ -645,15 +646,13 @@ public class DefaultClientConnection implements ClientConnection {
 
     /**
      * 生成下一个 MQTT 消息 ID,范围 1-65535
+     * 通过 (id % 65535) + 1 确保ID在 1-65535 范围内循环，无重复。</p>
      *
      * @return 消息 ID (1-65535)
      */
     private int nextMessageId() {
-        int id;
-        do {
-            id = ((short) MESSAGE_ID_GENERATOR.getAndAdd(this, (short) 1) + 1) & 0xFFFF;
-        } while (id == 0);
-        return id;
+        int id = (int) MESSAGE_ID_GENERATOR.getAndAdd(this, 1);
+        return ((id & 0x7FFFFFFF) % 65535) + 1;
     }
 
     private boolean hasFlag(int flag) {

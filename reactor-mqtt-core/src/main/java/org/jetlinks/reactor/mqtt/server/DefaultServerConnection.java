@@ -33,7 +33,6 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -57,6 +56,7 @@ public class DefaultServerConnection implements ServerConnection {
     private static final VarHandle SUBSCRIBE_HANDLER;
     private static final VarHandle UNSUBSCRIBE_HANDLER;
     private static final VarHandle AUTO_ACK;
+    private static final VarHandle MESSAGE_ID_GENERATOR;
 
     static {
         try {
@@ -70,6 +70,7 @@ public class DefaultServerConnection implements ServerConnection {
             SUBSCRIBE_HANDLER = lookup.findVarHandle(DefaultServerConnection.class, "subscribeHandler", Consumer.class);
             UNSUBSCRIBE_HANDLER = lookup.findVarHandle(DefaultServerConnection.class, "unsubscribeHandler", Consumer.class);
             AUTO_ACK = lookup.findVarHandle(DefaultServerConnection.class, "autoAck", boolean.class);
+            MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultServerConnection.class, "messageId", int.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -103,7 +104,8 @@ public class DefaultServerConnection implements ServerConnection {
     @SuppressWarnings("unused")
     private volatile boolean autoAck = true;
 
-    private final AtomicInteger messageIdGenerator = new AtomicInteger(0);
+    @SuppressWarnings("unused")
+    private volatile int messageId = 0;
 
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
@@ -468,18 +470,13 @@ public class DefaultServerConnection implements ServerConnection {
 
     /**
      * 生成下一个 MQTT 消息 ID,范围 1-65535
+     * 通过 (id % 65535) + 1 确保ID在 1-65535 范围内循环，无重复。</p>
      *
      * @return 消息 ID (1-65535)
      */
     private int nextMessageId() {
-        int id;
-        do {
-            // incrementAndGet 是 JVM 高度优化的原子操作
-            // & 0xFFFF 将结果限制在 0-65535 范围内
-            id = messageIdGenerator.incrementAndGet() & 0xFFFF;
-            // 跳过 0 (MQTT 协议要求)
-        } while (id == 0);
-        return id;
+        int id = (int) MESSAGE_ID_GENERATOR.getAndAdd(this, 1);
+        return ((id & 0x7FFFFFFF) % 65535) + 1;
     }
 
     @Override

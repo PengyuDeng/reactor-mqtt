@@ -18,8 +18,6 @@ package org.jetlinks.reactor.mqtt;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
-import java.util.concurrent.ConcurrentHashMap;
-
 /**
  * 预解析的 MQTT 主题，使用 Caffeine 缓存避免重复 split
  *
@@ -31,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>预计算哈希值，加速 Map 查找</li>
  *   <li>零拷贝数组访问（调用方承诺不修改）</li>
  *   <li><b>字符串去重池</b>：层级字符串自动去重，/org/1/device 和 /org/2/device 共享 "org" 和 "device"</li>
+ *   <li><b>LRU 淘汰机制</b>：字符串池使用 Caffeine Cache，防止无限增长</li>
  * </ul>
  *
  * @author PengyuDeng
@@ -38,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ParsedTopic {
 
     private static final int DEFAULT_CACHE_SIZE = 1024;
+    private static final int DEFAULT_STRING_POOL_SIZE = 2048;
 
     /**
      * Caffeine 高性能 LRU 缓存（无锁设计，优于 LinkedHashMap）
@@ -48,8 +48,12 @@ public final class ParsedTopic {
 
     /**
      * 字符串去重池 - 常见的层级字符串（如 "device", "sensor", "org"）会被共享
+     * 使用 Caffeine Cache 的 LRU 淘汰机制，防止极端场景下的内存泄漏
+     * （如数百万唯一设备 ID：/device/000001, /device/000002...）
      */
-    private static final ConcurrentHashMap<String, String> STRING_POOL = new ConcurrentHashMap<>(256);
+    private static final Cache<String, String> STRING_POOL = Caffeine.newBuilder()
+            .maximumSize(DEFAULT_STRING_POOL_SIZE)
+            .build();
 
     private final String original;
     private final String[] levels;
@@ -74,12 +78,12 @@ public final class ParsedTopic {
      * <p>优化目标：</p>
      * <ul>
      *   <li>/org/1/device 和 /org/2/device 共享 "org" 和 "device"</li>
-     *   <li>使用自定义池，可控内存占用</li>
+     *   <li>使用 Caffeine Cache 的 LRU 淘汰，防止内存无限增长</li>
      * </ul>
      */
     private static String internLevel(String level) {
         if (level.length() <= 8) {
-            return STRING_POOL.computeIfAbsent(level, k -> k);
+            return STRING_POOL.get(level, k -> k);
         }
         return level;
     }
@@ -143,7 +147,7 @@ public final class ParsedTopic {
     /**
      * 获取字符串池大小
      */
-    public static int getStringPoolSize() {
-        return STRING_POOL.size();
+    public static long getStringPoolSize() {
+        return STRING_POOL.estimatedSize();
     }
 }

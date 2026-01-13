@@ -408,12 +408,18 @@ public class DefaultClientConnection implements ClientConnection {
                                                       })
                                                       .then(resubscribeIfNeeded())
                                 )
-                                .subscribe(v -> clearFlag(RECONNECTING),
-                                           error -> {
-                                               clearFlag(RECONNECTING);
-                                               log.log(Level.WARNING, "Reconnect failed: " + error.getMessage());
-                                               attemptReconnect();
-                                           }
+                                .subscribe(
+                                        v -> clearFlag(RECONNECTING),
+                                        error -> {
+                                            clearFlag(RECONNECTING);
+                                            log.log(Level.WARNING, "Reconnect failed: " + error.getMessage());
+                                            attemptReconnect();
+                                        },
+                                        () -> {
+                                            clearFlag(RECONNECTING);
+                                            log.log(Level.WARNING, "Max reconnect attempts reached for client " + config.clientId + ", closing connection");
+                                            close().subscribe();
+                                        }
                                 );
     }
 

@@ -59,7 +59,7 @@ class BrokerServerConnection extends DefaultServerConnection {
 
             // 从 MqttSubscribeMessage 中提取所有订阅主题
             subscription.getMessage().payload().topicSubscriptions().forEach(topicSub -> {
-                String topic = topicSub.topicName();
+                String topic = topicSub.topicFilter();
                 listener.onSubscribe(clientId, topic).subscribe();
             });
         });

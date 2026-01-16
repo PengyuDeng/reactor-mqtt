@@ -28,4 +28,15 @@ public interface MqttConstants {
 
         MqttMessage PINGRESP_MESSAGE = new MqttMessage(Header.PINGRESP_HEADER);
     }
+
+    interface Topic {
+
+        char LEVEL_SEPARATOR_CHAR = '/';
+        char SINGLE_WILDCARD_CHAR = '+';
+        char MULTI_WILDCARD_CHAR = '#';
+
+        String LEVEL_SEPARATOR = String.valueOf(LEVEL_SEPARATOR_CHAR);
+        String SINGLE_WILDCARD = String.valueOf(SINGLE_WILDCARD_CHAR);
+        String MULTI_WILDCARD = String.valueOf(MULTI_WILDCARD_CHAR);
+    }
 }

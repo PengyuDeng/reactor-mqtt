@@ -15,6 +15,8 @@
  */
 package org.jetlinks.reactor.mqtt;
 
+import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.*;
+
 /**
  * MQTT 主题匹配工具类（零分配实现）
  *
@@ -58,14 +60,14 @@ public final class TopicMatcher {
             char fc = filter.charAt(filterIdx);
 
             // 多层通配符 #，匹配剩余所有
-            if (fc == '#') {
+            if (fc == MULTI_WILDCARD_CHAR) {
                 return true;
             }
 
             // 单层通配符 +，跳过 topic 当前层
-            if (fc == '+') {
+            if (fc == SINGLE_WILDCARD_CHAR) {
                 filterIdx++;
-                while (topicIdx < topicLen && topic.charAt(topicIdx) != '/') {
+                while (topicIdx < topicLen && topic.charAt(topicIdx) != LEVEL_SEPARATOR_CHAR) {
                     topicIdx++;
                 }
             } else {
@@ -84,14 +86,14 @@ public final class TopicMatcher {
         }
 
         // filter 剩余 # 可以匹配空
-        if (filterIdx < filterLen && filter.charAt(filterIdx) == '#') {
+        if (filterIdx < filterLen && filter.charAt(filterIdx) == MULTI_WILDCARD_CHAR) {
             return true;
         }
 
         // filter 剩余 /# 可以匹配空（如 a/b/# 匹配 a/b）
         if (filterIdx + 1 < filterLen
-                && filter.charAt(filterIdx) == '/'
-                && filter.charAt(filterIdx + 1) == '#') {
+                && filter.charAt(filterIdx) == LEVEL_SEPARATOR_CHAR
+                && filter.charAt(filterIdx + 1) == MULTI_WILDCARD_CHAR) {
             return topicIdx == topicLen;
         }
 

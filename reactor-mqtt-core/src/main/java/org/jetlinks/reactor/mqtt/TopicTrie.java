@@ -21,6 +21,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Supplier;
 
+import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.MULTI_WILDCARD;
+import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.SINGLE_WILDCARD;
+
 /**
  * 通用的 MQTT 主题 Trie 树实现
  *
@@ -54,10 +57,6 @@ import java.util.function.Supplier;
  * @author PengyuDeng
  */
 public class TopicTrie<T> {
-
-    private static final String LEVEL_SEPARATOR = "/";
-    private static final String SINGLE_WILDCARD = "+";
-    private static final String MULTI_WILDCARD = "#";
 
     private final TrieNode<T> root;
     private final Supplier<Collection<T>> collectionFactory;

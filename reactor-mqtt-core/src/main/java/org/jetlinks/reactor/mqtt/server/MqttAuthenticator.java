@@ -18,6 +18,10 @@ package org.jetlinks.reactor.mqtt.server;
 import org.jetlinks.reactor.mqtt.MqttAuth;
 import reactor.core.publisher.Mono;
 
+import java.util.Objects;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 /**
  * MQTT 认证器接口
  *
@@ -26,6 +30,8 @@ import reactor.core.publisher.Mono;
  * @author PengyuDeng
  */
 public interface MqttAuthenticator {
+
+    Logger log = Logger.getLogger(MqttAuthenticator.class.getName());
 
     /**
      * 验证客户端连接
@@ -43,7 +49,27 @@ public interface MqttAuthenticator {
      * @return 认证器实例
      */
     static MqttAuthenticator simple(String username, String password) {
-        return new SimpleMqttAuthenticator(username, password);
+        return connection -> Mono.fromSupplier(() -> {
+            MqttAuth auth = connection.getAuth();
+
+            // 检查是否提供了认证信息
+            if (auth == null || !auth.hasAuth()) {
+                log.log(Level.WARNING, () -> "Client " + connection.getClientId() + " authentication failed: no credentials provided");
+                return false;
+            }
+
+            // 验证用户名和密码
+            boolean isValid = Objects.equals(username, auth.getUsername())
+                           && Objects.equals(password, auth.getPassword());
+
+            if (!isValid) {
+                log.log(Level.WARNING, () -> "Client " + connection.getClientId() + " authentication failed: invalid credentials");
+            } else {
+                log.log(Level.FINE, () -> "Client " + connection.getClientId() + " authenticated successfully");
+            }
+
+            return isValid;
+        });
     }
 
     /**

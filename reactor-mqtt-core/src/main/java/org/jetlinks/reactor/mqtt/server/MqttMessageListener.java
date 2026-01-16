@@ -59,7 +59,6 @@ import reactor.core.publisher.Mono;
  * }</pre>
  *
  * @author PengyuDeng
- * @see ServerConnection#listener(MqttMessageListener)
  */
 public interface MqttMessageListener {
 

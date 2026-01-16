@@ -159,14 +159,6 @@ public interface MqttClient {
     MqttClient reconnectStrategy(ReconnectStrategy strategy);
 
     /**
-     * 启用或禁用自动重连
-     *
-     * @param enable true 启用，false 禁用
-     * @return 当前实例
-     */
-    MqttClient reconnect(boolean enable);
-
-    /**
      * 设置是否自动重新订阅
      *
      * @param autoResubscribe true 自动重新订阅，false 不自动重新订阅

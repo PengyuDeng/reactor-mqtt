@@ -174,17 +174,6 @@ class DefaultMqttClient implements MqttClient {
     }
 
     @Override
-    public MqttClient reconnect(boolean enable) {
-        if (enable) {
-            this.reconnectStrategy = ReconnectStrategy.exponentialBackoff(
-                    Duration.ofSeconds(1), Duration.ofMinutes(5));
-        } else {
-            this.reconnectStrategy = ReconnectStrategy.none();
-        }
-        return this;
-    }
-
-    @Override
     public MqttClient autoResubscribe(boolean autoResubscribe) {
         this.autoResubscribe = autoResubscribe;
         return this;

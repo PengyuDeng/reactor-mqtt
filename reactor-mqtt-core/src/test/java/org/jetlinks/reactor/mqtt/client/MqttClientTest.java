@@ -218,7 +218,6 @@ class MqttClientTest {
                            .host("127.0.0.1")
                            .port(TEST_PORT)
                            .clientId("test-no-reconnect")
-                           .reconnect(false)
                            .connectNow();
 
         assertNotNull(client);

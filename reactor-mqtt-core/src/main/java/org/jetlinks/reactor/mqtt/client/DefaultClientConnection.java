@@ -25,6 +25,7 @@ import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import reactor.netty.Connection;
 import reactor.netty.tcp.TcpClient;
 
@@ -129,11 +130,16 @@ public class DefaultClientConnection implements ClientConnection {
      */
     private final SubscriptionManager subscriptionManager;
 
+    /**
+     * 心跳定时器
+     */
+    private volatile Disposable heartbeatTimer;
+
     public DefaultClientConnection(Connection connection,
                                    String clientId,
                                    String username,
                                    byte[] password,
-                                   short keepAliveSeconds,
+                                   int keepAlive,
                                    boolean cleanSession,
                                    byte protocolVersion,
                                    MqttWillMessage willMessage,
@@ -149,7 +155,7 @@ public class DefaultClientConnection implements ClientConnection {
                                    SubscriptionManager subscriptionManager) {
 
         this.connection = connection;
-        this.config = new ConnectionConfig(clientId, username, password, keepAliveSeconds, cleanSession, protocolVersion,
+        this.config = new ConnectionConfig(clientId, username, password, keepAlive, cleanSession, protocolVersion,
                                            willMessage, publishingHandler, autoAck, qos,
                                            reconnectStrategy, autoResubscribe,
                                            subscribeTimeout, unsubscribeTimeout, publishTimeout);
@@ -170,6 +176,7 @@ public class DefaultClientConnection implements ClientConnection {
         ensureMqttCodec();
         setupConnectionHandlers();
         return sendConnect()
+                .doOnSuccess(v -> startHeartbeat())
                 .then(Mono.just(this));
     }
 
@@ -210,7 +217,7 @@ public class DefaultClientConnection implements ClientConnection {
     private Mono<Void> sendConnect() {
         MqttMessageBuilders.ConnectBuilder builder = MqttMessageBuilders.connect()
                                                                         .clientId(config.clientId)
-                                                                        .keepAlive(config.keepAliveSeconds)
+                                                                        .keepAlive(config.keepAlive)
                                                                         .cleanSession(config.cleanSession());
 
         if (config.protocolVersion == 5) {
@@ -242,6 +249,7 @@ public class DefaultClientConnection implements ClientConnection {
                                              .connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
                                          setConnectedFlag();
                                          resetReconnectAttempt();
+                                         startHeartbeat();
                                          return Mono.empty();
                                      } else {
                                          return Mono.error(new MqttConnectionException(
@@ -380,6 +388,7 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     private void handleDisconnect() {
+        stopHeartbeat();
         if (!clearFlag(CONNECTED)) {
             return;
         }
@@ -606,6 +615,7 @@ public class DefaultClientConnection implements ClientConnection {
             if (flagAlreadySet(CLOSED)) {
                 return Mono.empty();
             }
+            stopHeartbeat();
             clearFlag(CONNECTED);
 
             if (connection != null) {
@@ -657,6 +667,77 @@ public class DefaultClientConnection implements ClientConnection {
     private int nextMessageId() {
         int id = (int) MESSAGE_ID_GENERATOR.getAndAdd(this, 1);
         return ((id & 0x7FFFFFFF) % 65535) + 1;
+    }
+
+    /**
+     * 启动心跳定时器
+     * 如果 keepAlive > 0，定期发送 PINGREQ 消息
+     */
+    private void startHeartbeat() {
+        stopHeartbeat();
+
+        if (config.keepAlive <= 0) {
+            return;
+        }
+
+        // 心跳间隔设置为 keepAlive 的 75%，留有余地
+        long intervalSeconds = (long) (config.keepAlive * 0.75);
+        if (intervalSeconds < 1) {
+            intervalSeconds = 1;
+        }
+
+        if (log.isLoggable(Level.FINE)) {
+            log.fine("Starting heartbeat for client " + config.clientId + " with interval " + intervalSeconds + "s");
+        }
+
+        heartbeatTimer = Flux.interval(Duration.ofSeconds(intervalSeconds), Schedulers.parallel())
+                .flatMap(tick -> sendPing())
+                .subscribe(
+                        v -> {},
+                        error -> {
+                            if (log.isLoggable(Level.WARNING)) {
+                                log.log(Level.WARNING, "Heartbeat error for client " + config.clientId, error);
+                            }
+                        }
+                );
+    }
+
+    /**
+     * 停止心跳定时器
+     */
+    private void stopHeartbeat() {
+        Disposable timer = heartbeatTimer;
+        if (timer != null && !timer.isDisposed()) {
+            timer.dispose();
+            heartbeatTimer = null;
+            if (log.isLoggable(Level.FINE)) {
+                log.fine("Stopped heartbeat for client " + config.clientId);
+            }
+        }
+    }
+
+    /**
+     * 发送 PINGREQ 消息
+     */
+    private Mono<Void> sendPing() {
+        if (!hasFlag(CONNECTED)) {
+            return Mono.empty();
+        }
+
+        MqttMessage pingMessage = new MqttMessage(
+                new MqttFixedHeader(MqttMessageType.PINGREQ, false, MqttQoS.AT_MOST_ONCE, false, 0)
+        );
+
+        if (log.isLoggable(Level.FINEST)) {
+            log.finest("Sending PINGREQ for client " + config.clientId);
+        }
+
+        return send(pingMessage)
+                .doOnError(error -> {
+                    if (log.isLoggable(Level.WARNING)) {
+                        log.log(Level.WARNING, "Failed to send PINGREQ for client " + config.clientId, error);
+                    }
+                });
     }
 
     private boolean hasFlag(int flag) {
@@ -725,7 +806,7 @@ public class DefaultClientConnection implements ClientConnection {
         final String clientId;
         final String username;
         final byte[] password;
-        final short keepAliveSeconds;
+        final int keepAlive;
         final byte protocolVersion;
         final byte flags;
         final MqttWillMessage willMessage;
@@ -737,7 +818,7 @@ public class DefaultClientConnection implements ClientConnection {
         final Duration publishTimeout;
 
         ConnectionConfig(String clientId, String username, byte[] password,
-                         short keepAliveSeconds, boolean cleanSession, byte protocolVersion,
+                         int keepAlive, boolean cleanSession, byte protocolVersion,
                          MqttWillMessage willMessage,
                          Consumer<ClientReceivedPublish> publishingHandler,
                          boolean autoAck, MqttQoS qos,
@@ -746,7 +827,7 @@ public class DefaultClientConnection implements ClientConnection {
             this.clientId = clientId;
             this.username = username;
             this.password = password;
-            this.keepAliveSeconds = keepAliveSeconds;
+            this.keepAlive = keepAlive;
             this.protocolVersion = protocolVersion;
             this.flags = (byte) ((cleanSession ? FLAG_CLEAN_SESSION : 0)
                     | (autoAck ? FLAG_AUTO_ACK : 0)

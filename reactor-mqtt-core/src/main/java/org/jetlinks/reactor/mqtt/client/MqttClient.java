@@ -86,7 +86,7 @@ public interface MqttClient {
      * @param seconds 心跳间隔（秒）
      * @return 当前实例
      */
-    MqttClient keepAlive(short seconds);
+    MqttClient keepAlive(int seconds);
 
     /**
      * 设置是否清除会话

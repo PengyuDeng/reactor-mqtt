@@ -45,7 +45,7 @@ class DefaultMqttClient implements MqttClient {
     private String clientId;
     private String username;
     private byte[] password;
-    private short keepAliveSeconds = 60;
+    private int keepAlive = 60;
     private boolean cleanSession = true;
     private byte protocolVersion = MqttVersion.MQTT_3_1_1.protocolLevel();
     private int maxMessageSize = 8096;
@@ -112,11 +112,11 @@ class DefaultMqttClient implements MqttClient {
     }
 
     @Override
-    public MqttClient keepAlive(short seconds) {
+    public MqttClient keepAlive(int seconds) {
         if (seconds < 0) {
             throw new IllegalArgumentException("keepAlive must not be negative");
         }
-        this.keepAliveSeconds = seconds;
+        this.keepAlive = seconds;
         return this;
     }
 
@@ -271,7 +271,7 @@ class DefaultMqttClient implements MqttClient {
                                     actualClientId,
                                     username,
                                     password,
-                                    keepAliveSeconds,
+                                    keepAlive,
                                     cleanSession,
                                     protocolVersion,
                                     willMessage,

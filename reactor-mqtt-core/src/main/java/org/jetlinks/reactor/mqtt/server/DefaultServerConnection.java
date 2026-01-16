@@ -40,7 +40,6 @@ import java.util.logging.Logger;
 
 import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBCOMP_HEADER;
 import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREL_HEADER;
-import static org.jetlinks.reactor.mqtt.MqttConstants.Message.PINGRESP_MESSAGE;
 
 /**
  * 基于 Reactor Netty 的 MQTT 连接实现 - 纯响应式
@@ -314,7 +313,7 @@ public class DefaultServerConnection implements ServerConnection {
     }
 
     private Mono<Void> handlePingReq() {
-        return send(PINGRESP_MESSAGE);
+        return send(MqttMessage.PINGRESP);
     }
 
     Mono<Void> send(MqttMessage msg) {

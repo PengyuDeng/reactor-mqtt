@@ -18,6 +18,8 @@ package org.jetlinks.reactor.mqtt;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.LEVEL_SEPARATOR;
+
 /**
  * 预解析的 MQTT 主题，使用 Caffeine 缓存避免重复 split
  *
@@ -62,7 +64,7 @@ public final class ParsedTopic {
     private ParsedTopic(String topic) {
         this.original = topic;
 
-        String[] rawLevels = topic.split("/");
+        String[] rawLevels = topic.split(LEVEL_SEPARATOR);
         this.levels = new String[rawLevels.length];
 
         for (int i = 0; i < rawLevels.length; i++) {

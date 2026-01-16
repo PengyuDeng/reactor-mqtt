@@ -41,10 +41,8 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import static org.jetlinks.reactor.mqtt.MqttConstants.Message.DISCONNECT_MESSAGE;
 import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBCOMP_HEADER;
 import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREL_HEADER;
-import static org.jetlinks.reactor.mqtt.MqttConstants.Message.PING_MESSAGE;
 
 /**
  * MQTT 客户端连接实现
@@ -638,7 +636,7 @@ public class DefaultClientConnection implements ClientConnection {
             if (!hasFlag(CONNECTED)) {
                 return close();
             }
-            return send(DISCONNECT_MESSAGE)
+            return send(MqttMessage.DISCONNECT)
                     .then(close());
         });
     }
@@ -725,7 +723,7 @@ public class DefaultClientConnection implements ClientConnection {
         if (!hasFlag(CONNECTED)) {
             return Mono.empty();
         }
-        return send(PING_MESSAGE)
+        return send(MqttMessage.PINGREQ)
                 .doOnSuccess(v -> {
                     if (log.isLoggable(Level.FINEST)) {
                         log.finest("Sending PINGREQ for client " + config.clientId);

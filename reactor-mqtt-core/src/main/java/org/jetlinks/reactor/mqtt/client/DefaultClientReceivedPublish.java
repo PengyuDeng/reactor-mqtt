@@ -24,6 +24,8 @@ import reactor.core.publisher.Mono;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREC_HEADER;
+
 /**
  * MQTT 客户端接收消息实现
  *
@@ -131,7 +133,7 @@ class DefaultClientReceivedPublish implements ClientReceivedPublish {
                 return connection.send(pubAck);
             } else if (qos == MqttQoS.EXACTLY_ONCE) {
                 MqttMessage pubRec = new MqttMessage(
-                        new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0),
+                        PUBREC_HEADER,
                         MqttMessageIdVariableHeader.from(message.variableHeader().packetId()));
                 return connection.send(pubRec);
             }

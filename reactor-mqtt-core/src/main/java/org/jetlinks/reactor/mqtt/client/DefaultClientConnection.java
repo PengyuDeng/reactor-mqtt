@@ -41,6 +41,11 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.DISCONNECT_MESSAGE;
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBCOMP_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREL_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.PING_MESSAGE;
+
 /**
  * MQTT 客户端连接实现
  *
@@ -49,6 +54,7 @@ import java.util.logging.Logger;
 public class DefaultClientConnection implements ClientConnection {
 
     private static final Logger log = Logger.getLogger(DefaultClientConnection.class.getName());
+
 
     /**
      * 连接配置,包含所有 MQTT 连接参数
@@ -328,7 +334,7 @@ public class DefaultClientConnection implements ClientConnection {
         }
 
         MqttMessage pubRel = new MqttMessage(
-                new MqttFixedHeader(MqttMessageType.PUBREL, false, MqttQoS.AT_LEAST_ONCE, false, 0),
+                PUBREL_HEADER,
                 MqttMessageIdVariableHeader.from(messageId)
         );
 
@@ -342,7 +348,7 @@ public class DefaultClientConnection implements ClientConnection {
         int messageId = ((MqttMessageIdVariableHeader) msg.variableHeader()).messageId();
 
         MqttMessage pubComp = new MqttMessage(
-                new MqttFixedHeader(MqttMessageType.PUBCOMP, false, MqttQoS.AT_MOST_ONCE, false, 0),
+                PUBCOMP_HEADER,
                 MqttMessageIdVariableHeader.from(messageId)
         );
 
@@ -632,12 +638,7 @@ public class DefaultClientConnection implements ClientConnection {
             if (!hasFlag(CONNECTED)) {
                 return close();
             }
-
-            MqttMessage disconnectMessage = new MqttMessage(
-                    new MqttFixedHeader(MqttMessageType.DISCONNECT, false, MqttQoS.AT_MOST_ONCE, false, 0)
-            );
-
-            return send(disconnectMessage)
+            return send(DISCONNECT_MESSAGE)
                     .then(close());
         });
     }
@@ -691,15 +692,16 @@ public class DefaultClientConnection implements ClientConnection {
         }
 
         heartbeatTimer = Flux.interval(Duration.ofSeconds(intervalSeconds), Schedulers.parallel())
-                .flatMap(tick -> sendPing())
-                .subscribe(
-                        v -> {},
-                        error -> {
-                            if (log.isLoggable(Level.WARNING)) {
-                                log.log(Level.WARNING, "Heartbeat error for client " + config.clientId, error);
-                            }
-                        }
-                );
+                             .flatMap(tick -> sendPing())
+                             .subscribe(
+                                     v -> {
+                                     },
+                                     error -> {
+                                         if (log.isLoggable(Level.WARNING)) {
+                                             log.log(Level.WARNING, "Heartbeat error for client " + config.clientId, error);
+                                         }
+                                     }
+                             );
     }
 
     /**
@@ -723,16 +725,12 @@ public class DefaultClientConnection implements ClientConnection {
         if (!hasFlag(CONNECTED)) {
             return Mono.empty();
         }
-
-        MqttMessage pingMessage = new MqttMessage(
-                new MqttFixedHeader(MqttMessageType.PINGREQ, false, MqttQoS.AT_MOST_ONCE, false, 0)
-        );
-
-        if (log.isLoggable(Level.FINEST)) {
-            log.finest("Sending PINGREQ for client " + config.clientId);
-        }
-
-        return send(pingMessage)
+        return send(PING_MESSAGE)
+                .doOnSuccess(v -> {
+                    if (log.isLoggable(Level.FINEST)) {
+                        log.finest("Sending PINGREQ for client " + config.clientId);
+                    }
+                })
                 .doOnError(error -> {
                     if (log.isLoggable(Level.WARNING)) {
                         log.log(Level.WARNING, "Failed to send PINGREQ for client " + config.clientId, error);

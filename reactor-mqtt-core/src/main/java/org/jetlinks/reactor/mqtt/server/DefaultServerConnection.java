@@ -38,6 +38,10 @@ import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBCOMP_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREL_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.PINGRESP_MESSAGE;
+
 /**
  * 基于 Reactor Netty 的 MQTT 连接实现 - 纯响应式
  *
@@ -295,7 +299,7 @@ public class DefaultServerConnection implements ServerConnection {
 
     private Mono<Void> handlePubRec(MqttMessageIdVariableHeader header) {
         MqttMessage pubRel = new MqttMessage(
-                new MqttFixedHeader(MqttMessageType.PUBREL, false, MqttQoS.AT_LEAST_ONCE, false, 0),
+                PUBREL_HEADER,
                 MqttMessageIdVariableHeader.from(header.messageId())
         );
         return send(pubRel);
@@ -303,17 +307,14 @@ public class DefaultServerConnection implements ServerConnection {
 
     private Mono<Void> handlePubRel(MqttMessageIdVariableHeader header) {
         MqttMessage pubComp = new MqttMessage(
-                new MqttFixedHeader(MqttMessageType.PUBCOMP, false, MqttQoS.AT_MOST_ONCE, false, 0),
+                PUBCOMP_HEADER,
                 MqttMessageIdVariableHeader.from(header.messageId())
         );
         return send(pubComp);
     }
 
     private Mono<Void> handlePingReq() {
-        MqttMessage pingResp = new MqttMessage(
-                new MqttFixedHeader(MqttMessageType.PINGRESP, false, MqttQoS.AT_MOST_ONCE, false, 0)
-        );
-        return send(pingResp);
+        return send(PINGRESP_MESSAGE);
     }
 
     Mono<Void> send(MqttMessage msg) {

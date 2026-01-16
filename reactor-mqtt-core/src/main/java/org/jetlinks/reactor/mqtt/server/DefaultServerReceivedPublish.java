@@ -25,6 +25,8 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.function.Function;
 
+import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREC_HEADER;
+
 /**
  *
  * @author PengyuDeng
@@ -141,7 +143,7 @@ public class DefaultServerReceivedPublish implements ServerReceivedPublish {
                 ackMono = sender.apply(pubAck);
             } else if (qos == MqttQoS.EXACTLY_ONCE) {
                 MqttMessage pubRec = new MqttMessage(
-                        new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0),
+                        PUBREC_HEADER,
                         MqttMessageIdVariableHeader.from(message.variableHeader().packetId()));
                 ackMono = sender.apply(pubRec);
             } else {

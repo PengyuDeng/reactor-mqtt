@@ -24,7 +24,7 @@ import reactor.core.publisher.Mono;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
-import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREC_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.MessageHeader.PUBREC_HEADER;
 
 /**
  * MQTT 客户端接收消息实现

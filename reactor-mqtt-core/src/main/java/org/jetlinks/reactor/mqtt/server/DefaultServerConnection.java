@@ -38,8 +38,8 @@ import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBCOMP_HEADER;
-import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREL_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.MessageHeader.PUBCOMP_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.MessageHeader.PUBREL_HEADER;
 
 /**
  * 基于 Reactor Netty 的 MQTT 连接实现 - 纯响应式

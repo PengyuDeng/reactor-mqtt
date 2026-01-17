@@ -41,7 +41,8 @@ class DefaultSubscriptionManager implements SubscriptionManager {
 
     private static final Logger log = Logger.getLogger(DefaultSubscriptionManager.class.getName());
 
-    private final Map<String, SubscriptionHandlers> subscriptions = new ConcurrentHashMap<>();
+    // 使用较小的初始容量以节省内存（大多数连接订阅主题不多）
+    private final Map<String, SubscriptionHandlers> subscriptions = new ConcurrentHashMap<>(4, 0.75f, 2);
 
     @Override
     public Disposable subscribe(ClientConnection connection,

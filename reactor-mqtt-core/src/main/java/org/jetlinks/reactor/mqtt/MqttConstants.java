@@ -4,17 +4,16 @@ import io.netty.handler.codec.mqtt.MqttFixedHeader;
 import io.netty.handler.codec.mqtt.MqttMessageType;
 import io.netty.handler.codec.mqtt.MqttQoS;
 
+import java.time.Duration;
+
 public interface MqttConstants {
-    interface Message {
+    interface MessageHeader {
 
-        interface Header {
+        MqttFixedHeader PUBREL_HEADER = new MqttFixedHeader(MqttMessageType.PUBREL, false, MqttQoS.AT_LEAST_ONCE, false, 0);
 
-            MqttFixedHeader PUBREL_HEADER = new MqttFixedHeader(MqttMessageType.PUBREL, false, MqttQoS.AT_LEAST_ONCE, false, 0);
+        MqttFixedHeader PUBCOMP_HEADER = new MqttFixedHeader(MqttMessageType.PUBCOMP, false, MqttQoS.AT_MOST_ONCE, false, 0);
 
-            MqttFixedHeader PUBCOMP_HEADER = new MqttFixedHeader(MqttMessageType.PUBCOMP, false, MqttQoS.AT_MOST_ONCE, false, 0);
-
-            MqttFixedHeader PUBREC_HEADER = new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0);
-        }
+        MqttFixedHeader PUBREC_HEADER = new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0);
     }
 
     interface Topic {
@@ -26,5 +25,10 @@ public interface MqttConstants {
         String LEVEL_SEPARATOR = String.valueOf(LEVEL_SEPARATOR_CHAR);
         String SINGLE_WILDCARD = String.valueOf(SINGLE_WILDCARD_CHAR);
         String MULTI_WILDCARD = String.valueOf(MULTI_WILDCARD_CHAR);
+    }
+
+    interface Time {
+        Duration TEN_SECONDS = Duration.ofSeconds(10);
+        Duration THIRTY_SECONDS = Duration.ofSeconds(30);
     }
 }

@@ -25,7 +25,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.function.Function;
 
-import static org.jetlinks.reactor.mqtt.MqttConstants.Message.Header.PUBREC_HEADER;
+import static org.jetlinks.reactor.mqtt.MqttConstants.MessageHeader.PUBREC_HEADER;
 
 /**
  *

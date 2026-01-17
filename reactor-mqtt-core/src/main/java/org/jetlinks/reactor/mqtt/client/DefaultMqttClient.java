@@ -29,8 +29,6 @@ import reactor.netty.resources.LoopResources;
 import reactor.netty.tcp.TcpClient;
 
 import java.time.Duration;
-import java.util.UUID;
-import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -40,113 +38,77 @@ import java.util.function.Supplier;
  */
 class DefaultMqttClient implements MqttClient {
 
-    private String host = "127.0.0.1";
-    private int port = 1883;
-    private String clientId;
-    private String username;
-    private byte[] password;
-    private int keepAlive = 60;
-    private boolean cleanSession = true;
-    private byte protocolVersion = MqttVersion.MQTT_3_1_1.protocolLevel();
-    private int maxMessageSize = 8096;
-    private MqttWillMessage willMessage;
-    private SslContext sslContext;
-    private ReconnectStrategy reconnectStrategy = ReconnectStrategy.none();
-    private boolean autoResubscribe = true;
-    private java.util.function.Function<ClientReceivedPublish, Mono<Void>> publishingHandler;
-    private boolean autoAck = true;
-    private MqttQoS qos = MqttQoS.AT_MOST_ONCE;
-    private LoopResources loopResources;
-    private boolean tcpNoDelay = true;
-    private Duration connectTimeout = Duration.ofSeconds(10);
-    private Duration subscribeTimeout = Duration.ofSeconds(10);
-    private Duration unsubscribeTimeout = Duration.ofSeconds(10);
-    private Duration publishTimeout = Duration.ofSeconds(30);
-    private SubscriptionManager subscriptionManager;
+    private final MqttClientConfig config;
 
     DefaultMqttClient() {
+        config = new MqttClientConfig();
     }
 
     @Override
     public MqttClient host(String host) {
-        if (host == null || host.isBlank()) {
-            throw new IllegalArgumentException("host must not be null or blank");
-        }
-        this.host = host;
+        config.setHost(host);
         return this;
     }
 
     @Override
     public MqttClient port(int port) {
-        if (port < 0 || port > 65535) {
-            throw new IllegalArgumentException("port must be between 0 and 65535");
-        }
-        this.port = port;
+        config.setPort(port);
         return this;
     }
 
     @Override
     public MqttClient clientId(String clientId) {
-        this.clientId = clientId;
+        config.setClientId(clientId);
         return this;
     }
 
     @Override
     public MqttClient handlePublishing(java.util.function.Function<ClientReceivedPublish, Mono<Void>> handler) {
-        this.publishingHandler = handler;
+        config.setPublishingHandler(handler);
         return this;
     }
 
     @Override
     public MqttClient auth(String username, String password) {
-        this.username = username;
-        this.password = password != null ? password.getBytes() : null;
+        config.setUsername(username);
+        config.setPassword(password != null ? password.getBytes() : null);
         return this;
     }
 
     @Override
     public MqttClient auth(String username, byte[] password) {
-        this.username = username;
-        this.password = password;
+        config.setUsername(username);
+        config.setPassword(password);
         return this;
     }
 
     @Override
     public MqttClient keepAlive(int seconds) {
-        if (seconds < 0) {
-            throw new IllegalArgumentException("keepAlive must not be negative");
-        }
-        this.keepAlive = seconds;
+        config.setKeepAlive(seconds);
         return this;
     }
 
     @Override
     public MqttClient cleanSession(boolean cleanSession) {
-        this.cleanSession = cleanSession;
+        config.setCleanSession(cleanSession);
         return this;
     }
 
     @Override
     public MqttClient protocolVersion(MqttVersion version) {
-        if (version == null) {
-            throw new IllegalArgumentException("protocolVersion must not be null");
-        }
-        this.protocolVersion = version.protocolLevel();
+        config.setProtocolVersion(version.protocolLevel());
         return this;
     }
 
     @Override
     public MqttClient maxMessageSize(int maxMessageSize) {
-        if (maxMessageSize <= 0) {
-            throw new IllegalArgumentException("maxMessageSize must be positive");
-        }
-        this.maxMessageSize = maxMessageSize;
+        config.setMaxMessageSize(maxMessageSize);
         return this;
     }
 
     @Override
     public MqttClient will(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
-        this.willMessage = new MqttWillMessage(topic, payload, qos, retain);
+        config.setWillMessage(new MqttWillMessage(topic, payload, qos, retain));
         return this;
     }
 
@@ -157,165 +119,121 @@ class DefaultMqttClient implements MqttClient {
 
     @Override
     public MqttClient will(MqttWillMessage willMessage) {
-        this.willMessage = willMessage;
+        config.setWillMessage(willMessage);
         return this;
     }
 
     @Override
     public MqttClient ssl(SslContext sslContext) {
-        this.sslContext = sslContext;
+        config.setSslContext(sslContext);
         return this;
     }
 
     @Override
     public MqttClient reconnectStrategy(ReconnectStrategy strategy) {
-        this.reconnectStrategy = strategy != null ? strategy : ReconnectStrategy.none();
+        config.setReconnectStrategy(strategy != null ? strategy : ReconnectStrategy.none());
         return this;
     }
 
     @Override
     public MqttClient autoResubscribe(boolean autoResubscribe) {
-        this.autoResubscribe = autoResubscribe;
+        config.setAutoResubscribe(autoResubscribe);
         return this;
     }
 
     @Override
     public MqttClient autoAck(boolean autoAck) {
-        this.autoAck = autoAck;
+        config.setAutoAck(autoAck);
         return this;
     }
 
     @Override
     public MqttClient qos(MqttQoS qos) {
-        if (qos == null) {
-            throw new IllegalArgumentException("defaultQos must not be null");
-        }
-        this.qos = qos;
+        config.setQos(qos);
         return this;
     }
 
     @Override
     public MqttClient loopResources(LoopResources loopResources) {
-        this.loopResources = loopResources;
+        config.setLoopResources(loopResources);
         return this;
     }
 
     @Override
     public MqttClient tcpNoDelay(boolean tcpNoDelay) {
-        this.tcpNoDelay = tcpNoDelay;
+        config.setTcpNoDelay(tcpNoDelay);
         return this;
     }
 
+    @Override
     public MqttClient connectTimeout(Duration timeout) {
-        this.connectTimeout = timeout;
+        config.setConnectTimeout(timeout);
         return this;
     }
 
     @Override
     public MqttClient subscribeTimeout(Duration timeout) {
-        this.subscribeTimeout = timeout;
+        config.setSubscribeTimeout(timeout);
         return this;
     }
 
     @Override
     public MqttClient unsubscribeTimeout(Duration timeout) {
-        this.unsubscribeTimeout = timeout;
+        config.setUnsubscribeTimeout(timeout);
         return this;
     }
 
     @Override
     public MqttClient publishTimeout(Duration timeout) {
-        this.publishTimeout = timeout;
+        config.setPublishTimeout(timeout);
         return this;
     }
 
     @Override
     public MqttClient subscriptionManager(SubscriptionManager subscriptionManager) {
-        this.subscriptionManager = subscriptionManager;
+        config.setSubscriptionManager(subscriptionManager);
         return this;
     }
 
     @Override
     public Mono<ClientConnection> connect() {
-        String actualClientId = clientId != null ? clientId :
-                "reactor-mqtt-" + UUID.randomUUID().toString().substring(0, 8);
-
-        TcpClient tcpClient = TcpClient.create()
-                                       .host(host)
-                                       .port(port)
-                                       .option(ChannelOption.TCP_NODELAY, tcpNoDelay)
-                                       .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
-                                       .doOnConnected(conn -> {
-                                           conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
-                                           conn.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
-                                       });
-
-        if (loopResources != null) {
-            tcpClient = tcpClient.runOn(loopResources);
-        }
-
-        if (sslContext != null) {
-            tcpClient = tcpClient.secure(spec -> spec.sslContext(sslContext));
-        }
-
+        config.getClientId();
         final Supplier<TcpClient> tcpClientSupplier = this::createTcpClient;
 
-        return tcpClient.connect()
-                        .flatMap(conn -> {
-                            Consumer<ClientReceivedPublish> consumer = null;
-                            if (publishingHandler != null) {
-                                consumer = pub -> publishingHandler.apply(pub).subscribe();
-                            }
-                            DefaultClientConnection mqttConn = new DefaultClientConnection(
-                                    conn,
-                                    actualClientId,
-                                    username,
-                                    password,
-                                    keepAlive,
-                                    cleanSession,
-                                    protocolVersion,
-                                    willMessage,
-                                    consumer,
-                                    autoAck,
-                                    qos,
-                                    reconnectStrategy,
-                                    autoResubscribe,
-                                    tcpClientSupplier,
-                                    subscribeTimeout,
-                                    unsubscribeTimeout,
-                                    publishTimeout,
-                                    subscriptionManager
-                            );
-                            return mqttConn.initialize();
-                        });
+        return createTcpClient()
+                .connect()
+                .map(conn -> new DefaultClientConnection(conn, config, tcpClientSupplier))
+                .flatMap(DefaultClientConnection::initialize);
     }
 
     @Override
     public ClientConnection connectNow() {
         return connect()
-                .timeout(connectTimeout)
+                .timeout(config.getConnectTimeout())
                 .block();
     }
 
     private TcpClient createTcpClient() {
-        TcpClient client = TcpClient.create()
-                                    .host(host)
-                                    .port(port)
-                                    .option(ChannelOption.TCP_NODELAY, tcpNoDelay)
-                                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
-                                    .doOnConnected(conn -> {
-                                        conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
-                                        conn.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
-                                    });
+        TcpClient tcpClient = TcpClient.create()
+                                       .host(config.getHost())
+                                       .port(config.getPort())
+                                       .option(ChannelOption.TCP_NODELAY, config.isTcpNoDelay())
+                                       .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) config
+                                               .getConnectTimeout()
+                                               .toMillis())
+                                       .doOnConnected(conn -> {
+                                           conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
+                                           conn.addHandlerFirst("mqttDecoder", new MqttDecoder(config.getMaxMessageSize()));
+                                       });
 
-        if (loopResources != null) {
-            client = client.runOn(loopResources);
+        if (config.getLoopResources() != null) {
+            tcpClient = tcpClient.runOn(config.getLoopResources());
         }
 
-        if (sslContext != null) {
-            client = client.secure(spec -> spec.sslContext(sslContext));
+        if (config.getSslContext() != null) {
+            tcpClient = tcpClient.secure(spec -> spec.sslContext(config.getSslContext()));
         }
 
-        return client;
+        return tcpClient;
     }
 }

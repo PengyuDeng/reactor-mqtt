@@ -61,9 +61,7 @@ public class TopicTrie<T> {
     private final TrieNode<T> root;
     private final Supplier<Collection<T>> collectionFactory;
 
-    // 新增：ThreadLocal 集合池，减少 GC 压力
-    private static final ThreadLocal<MatchResultPool> RESULT_POOL =
-        ThreadLocal.withInitial(MatchResultPool::new);
+    private static final ThreadLocal<MatchResultPool> RESULT_POOL = ThreadLocal.withInitial(MatchResultPool::new);
 
     /**
      * 创建一个新的 TopicTrie，使用 CopyOnWriteArraySet 存储订阅者（适合读多写少）
@@ -149,7 +147,7 @@ public class TopicTrie<T> {
      * 递归移除订阅，并清理空节点
      */
     private boolean removeSubscriptionRecursive(TrieNode<T> node, String[] levels, int depth,
-                                                 T subscription, boolean[] removed) {
+                                                T subscription, boolean[] removed) {
         if (depth == levels.length) {
             if (node.subscriptions.remove(subscription)) {
                 removed[0] = true;
@@ -211,8 +209,8 @@ public class TopicTrie<T> {
 
             // 返回不可变副本（调用方可以安全持有）
             return workingSet.isEmpty()
-                ? Collections.emptySet()
-                : Set.copyOf(workingSet);
+                    ? Collections.emptySet()
+                    : Set.copyOf(workingSet);
         } finally {
             // 归还到池中（不清空，下次使用时再清空）
             pool.release(workingSet);
@@ -371,7 +369,6 @@ public class TopicTrie<T> {
 
         TrieNode(Supplier<Collection<T>> collectionFactory) {
             this.subscriptions = collectionFactory.get();
-            // children 延迟初始化 - 节省内存
             this.children = null;
         }
 
@@ -387,9 +384,9 @@ public class TopicTrie<T> {
 
         boolean isEmpty() {
             return subscriptions.isEmpty() &&
-                   (children == null || children.isEmpty()) &&
-                   plusWildcard == null &&
-                   hashWildcard == null;
+                    (children == null || children.isEmpty()) &&
+                    plusWildcard == null &&
+                    hashWildcard == null;
         }
     }
 
@@ -403,7 +400,6 @@ public class TopicTrie<T> {
         @SuppressWarnings("unchecked")
         <T> Set<T> acquire() {
             if (inUse) {
-                // 嵌套调用时创建新集合（罕见情况）
                 return new HashSet<>();
             }
             inUse = true;
@@ -414,7 +410,6 @@ public class TopicTrie<T> {
             if (set == reusableSet) {
                 inUse = false;
             }
-            // 如果是临时创建的集合，直接丢弃（GC 回收）
         }
     }
 }

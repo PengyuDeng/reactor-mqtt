@@ -65,7 +65,6 @@ class DefaultSubscriptionManager implements SubscriptionManager {
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
         String topic = publishing.getTopic();
 
-        // 使用 Flux 并行处理所有匹配的订阅，每个订阅独立隔离错误
         return Flux.fromIterable(subscriptions.entrySet())
                    .filter(entry -> TopicMatcher.matches(entry.getKey(), topic))
                    .flatMap(entry -> entry.getValue().handle(publishing))
@@ -90,6 +89,7 @@ class DefaultSubscriptionManager implements SubscriptionManager {
      * 订阅处理器容器，支持同一主题多个处理器
      */
     private class DefaultSubscriptionHandlers implements SubscriptionHandlers {
+
         private static final VarHandle SUBSCRIBED;
 
         static {
@@ -102,9 +102,13 @@ class DefaultSubscriptionManager implements SubscriptionManager {
         }
 
         private final String topic;
+
         private final MqttQoS qos;
+
         private final ClientConnection connection;
+
         private final List<Function<ClientReceivedPublish, Mono<Void>>> handlers = new CopyOnWriteArrayList<>();
+
         @SuppressWarnings("unused")
         private volatile boolean subscribed = false;
 
@@ -217,6 +221,41 @@ class DefaultSubscriptionManager implements SubscriptionManager {
             }
             SUBSCRIBED.set(this, false);
             handlers.clear();
+        }
+
+        /**
+         * 基于主题的相等性判断
+         * <p>
+         * 两个 SubscriptionHandlers 如果订阅的主题相同，则被视为相等。
+         * 这确保了在 Set 集合中不会出现重复的主题订阅。
+         * </p>
+         *
+         * @param o 要比较的对象
+         * @return true 如果主题相同
+         */
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            DefaultSubscriptionHandlers that = (DefaultSubscriptionHandlers) o;
+            return topic.equals(that.topic);
+        }
+
+        /**
+         * 基于主题的哈希码
+         * <p>
+         * 与 equals() 保持一致，只基于 topic 计算哈希值。
+         * </p>
+         *
+         * @return 主题的哈希码
+         */
+        @Override
+        public int hashCode() {
+            return topic.hashCode();
         }
 
     }

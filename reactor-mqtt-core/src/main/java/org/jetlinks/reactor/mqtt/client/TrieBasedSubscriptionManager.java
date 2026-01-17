@@ -58,12 +58,13 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         String topicStr = topic.toString();
 
         // 获取或创建订阅处理器容器
+        String[] levels = ParsedTopic.parse(topicStr).getLevels();
         SubscriptionHandlers handlers = subscriptionsMap.computeIfAbsent(
                 topicStr,
                 k -> {
                     TrieBasedSubscriptionHandlers h = new TrieBasedSubscriptionHandlers(topicStr, qos, connection);
                     // 将订阅添加到通用 TopicTrie
-                    trie.addSubscription(ParsedTopic.parse(topicStr).getLevels(), h);
+                    trie.addSubscription(levels, h);
                     return h;
                 }
         );
@@ -72,19 +73,16 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         return handlers.addHandler(handler, () -> {
             // 当最后一个处理器被移除时，从 Trie 和 Map 中删除
             subscriptionsMap.remove(topicStr);
-            trie.removeSubscription(ParsedTopic.parse(topicStr).getLevels(), handlers);
+            trie.removeSubscription(levels, handlers);
         });
     }
 
     @Override
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
-        // 使用预解析的层级数组，避免重复 split
         String[] topicLevels = publishing.getTopicLevels();
 
-        // 使用通用 TopicTrie 快速查找匹配的订阅
         Set<SubscriptionHandlers> matchedHandlers = trie.findMatches(topicLevels);
 
-        // 并行处理所有匹配的订阅
         return Flux.fromIterable(matchedHandlers)
                    .flatMap(h -> h.handle(publishing))
                    .then();
@@ -110,7 +108,6 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
      */
     private static class TrieBasedSubscriptionHandlers implements SubscriptionHandlers {
 
-
         private static final VarHandle SUBSCRIBED;
 
         static {
@@ -123,9 +120,13 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         }
 
         private final String topic;
+
         private final MqttQoS qos;
+
         private final ClientConnection connection;
+
         private final List<Function<ClientReceivedPublish, Mono<Void>>> handlers = new CopyOnWriteArrayList<>();
+
         @SuppressWarnings("unused")
         private volatile boolean subscribed = false;
 
@@ -221,21 +222,55 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         @Override
         public void dispose() {
             if ((boolean) SUBSCRIBED.get(this) && connection.isAlive()) {
-                connection.unsubscribe(topic).subscribe(
-                        v -> {
-                        },
-                        error -> {
-                            // 只记录非超时错误
-                            if (!(error instanceof java.util.concurrent.TimeoutException)) {
-                                if (log.isLoggable(Level.WARNING)) {
-                                    log.log(Level.WARNING, "Failed to unsubscribe from topic: " + topic, error);
-                                }
-                            }
-                        }
-                );
+                connection.unsubscribe(topic)
+                          .subscribe(null,
+                                     error -> {
+                                         // 只记录非超时错误
+                                         if (!(error instanceof java.util.concurrent.TimeoutException)) {
+                                             if (log.isLoggable(Level.WARNING)) {
+                                                 log.log(Level.WARNING, "Failed to unsubscribe from topic: " + topic, error);
+                                             }
+                                         }
+                                     }
+                          );
             }
             SUBSCRIBED.set(this, false);
             handlers.clear();
+        }
+
+        /**
+         * 基于主题的相等性判断
+         * <p>
+         * 两个 SubscriptionHandlers 如果订阅的主题相同，则被视为相等。
+         * 这确保了在 Set 集合中不会出现重复的主题订阅。
+         * </p>
+         *
+         * @param o 要比较的对象
+         * @return true 如果主题相同
+         */
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            TrieBasedSubscriptionHandlers that = (TrieBasedSubscriptionHandlers) o;
+            return topic.equals(that.topic);
+        }
+
+        /**
+         * 基于主题的哈希码
+         * <p>
+         * 与 equals() 保持一致，只基于 topic 计算哈希值。
+         * </p>
+         *
+         * @return 主题的哈希码
+         */
+        @Override
+        public int hashCode() {
+            return topic.hashCode();
         }
     }
 }

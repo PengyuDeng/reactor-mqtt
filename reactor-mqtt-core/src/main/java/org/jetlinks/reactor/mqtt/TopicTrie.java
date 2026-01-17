@@ -212,7 +212,7 @@ public class TopicTrie<T> {
             // 返回不可变副本（调用方可以安全持有）
             return workingSet.isEmpty()
                 ? Collections.emptySet()
-                : Collections.unmodifiableSet(new HashSet<>(workingSet));
+                : Set.copyOf(workingSet);
         } finally {
             // 归还到池中（不清空，下次使用时再清空）
             pool.release(workingSet);

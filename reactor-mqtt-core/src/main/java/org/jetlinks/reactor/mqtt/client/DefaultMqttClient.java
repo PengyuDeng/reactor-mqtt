@@ -96,7 +96,7 @@ class DefaultMqttClient implements MqttClient {
 
     @Override
     public MqttClient protocolVersion(MqttVersion version) {
-        config.setProtocolVersion(version.protocolLevel());
+        config.setProtocolVersion(version);
         return this;
     }
 

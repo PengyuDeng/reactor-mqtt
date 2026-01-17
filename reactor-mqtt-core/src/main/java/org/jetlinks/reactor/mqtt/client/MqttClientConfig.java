@@ -52,7 +52,7 @@ public class MqttClientConfig {
     private byte[] password;
     private int keepAlive = 60;
     private boolean cleanSession = true;
-    private byte protocolVersion = MqttVersion.MQTT_3_1_1.protocolLevel();
+    private MqttVersion protocolVersion = MqttVersion.MQTT_3_1_1;
     private int maxMessageSize = 8096;
     private MqttWillMessage willMessage;
     private SslContext sslContext;
@@ -137,11 +137,11 @@ public class MqttClientConfig {
         this.cleanSession = cleanSession;
     }
 
-    public byte getProtocolVersion() {
+    public MqttVersion getProtocolVersion() {
         return protocolVersion;
     }
 
-    public void setProtocolVersion(byte protocolVersion) {
+    public void setProtocolVersion(MqttVersion protocolVersion) {
         this.protocolVersion = protocolVersion;
     }
 

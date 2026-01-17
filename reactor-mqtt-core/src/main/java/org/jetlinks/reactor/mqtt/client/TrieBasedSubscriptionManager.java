@@ -61,7 +61,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         SubscriptionHandlers handlers = subscriptionsMap.computeIfAbsent(
                 topicStr,
                 k -> {
-                    SubscriptionHandlers h = new SubscriptionHandlers(topicStr, qos, connection);
+                    TrieBasedSubscriptionHandlers h = new TrieBasedSubscriptionHandlers(topicStr, qos, connection);
                     // 将订阅添加到通用 TopicTrie
                     trie.addSubscription(ParsedTopic.parse(topicStr).getLevels(), h);
                     return h;
@@ -94,7 +94,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
     public Iterable<SubscriptionInfo> getSubscriptions() {
         return subscriptionsMap.values()
                                .stream()
-                               .map(h -> (SubscriptionInfo) new SubscriptionInfoImpl(h.topic, h.qos))
+                               .map(DefaultSubscriptionInfo::of)
                                .toList();
     }
 
@@ -106,21 +106,17 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
     }
 
     /**
-     * 订阅信息实现
-     */
-    private record SubscriptionInfoImpl(String topic, MqttQoS qos) implements SubscriptionInfo {
-    }
-
-    /**
      * 订阅处理器容器，支持同一主题多个处理器
      */
-    private static class SubscriptionHandlers {
+    private static class TrieBasedSubscriptionHandlers implements SubscriptionHandlers {
+
+
         private static final VarHandle SUBSCRIBED;
 
         static {
             try {
                 MethodHandles.Lookup lookup = MethodHandles.lookup();
-                SUBSCRIBED = lookup.findVarHandle(SubscriptionHandlers.class, "subscribed", boolean.class);
+                SUBSCRIBED = lookup.findVarHandle(TrieBasedSubscriptionHandlers.class, "subscribed", boolean.class);
             } catch (NoSuchFieldException | IllegalAccessException e) {
                 throw new ExceptionInInitializerError(e);
             }
@@ -129,14 +125,34 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         private final String topic;
         private final MqttQoS qos;
         private final ClientConnection connection;
-        private final List<HandlerEntry> handlers = new CopyOnWriteArrayList<>();
+        private final List<Function<ClientReceivedPublish, Mono<Void>>> handlers = new CopyOnWriteArrayList<>();
         @SuppressWarnings("unused")
         private volatile boolean subscribed = false;
 
-        SubscriptionHandlers(String topic, MqttQoS qos, ClientConnection connection) {
+        TrieBasedSubscriptionHandlers(String topic, MqttQoS qos, ClientConnection connection) {
             this.topic = topic;
             this.qos = qos;
             this.connection = connection;
+        }
+
+        @Override
+        public String getTopic() {
+            return topic;
+        }
+
+        @Override
+        public MqttQoS getQos() {
+            return qos;
+        }
+
+        @Override
+        public ClientConnection getConnection() {
+            return connection;
+        }
+
+        @Override
+        public boolean isSubscribed() {
+            return (boolean) SUBSCRIBED.get(this);
         }
 
         /**
@@ -146,30 +162,29 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
          * @param onLastRemoved 当最后一个处理器被移除时的回调
          * @return Disposable 用于移除此处理器
          */
-        Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler, Runnable onLastRemoved) {
-            HandlerEntry entry = new HandlerEntry(handler);
-            handlers.add(entry);
+        @Override
+        public Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler, Runnable onLastRemoved) {
+            handlers.add(handler);
 
             // 第一个处理器时执行实际订阅 - 使用CAS保证只执行一次
             if (SUBSCRIBED.compareAndSet(this, false, true)) {
                 // 首次订阅，发送 SUBSCRIBE 消息到服务器
-                if (connection instanceof DefaultClientConnection) {
-                    ((DefaultClientConnection) connection)
-                            .doSubscribe(topic, qos)
-                            .subscribe(
-                                    v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
-                                    error -> {
-                                        if (log.isLoggable(Level.WARNING)) {
-                                            log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error);
-                                        }
-                                    }
-                            );
+                if (connection instanceof DefaultClientConnection c) {
+                    c.doSubscribe(topic, qos)
+                     .subscribe(
+                             v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
+                             error -> {
+                                 if (log.isLoggable(Level.WARNING)) {
+                                     log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error);
+                                 }
+                             }
+                     );
                 }
             }
 
             // 返回 Disposable 用于移除此处理器
             return () -> {
-                handlers.remove(entry);
+                handlers.remove(handler);
 
                 // 如果没有处理器了，取消订阅并触发清理回调
                 if (handlers.isEmpty()) {
@@ -184,25 +199,27 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         /**
          * 处理消息，调用所有处理器
          */
-        Mono<Void> handle(ClientReceivedPublish publishing) {
+        @Override
+        public Mono<Void> handle(ClientReceivedPublish publishing) {
             return Flux.fromIterable(handlers)
-                       .flatMap(entry -> entry.handler.apply(publishing)
-                                                      .onErrorResume(error -> {
-                                                          if (log.isLoggable(Level.WARNING)) {
-                                                              log.log(Level.WARNING,
-                                                                      String.format("Handler error for topic [%s]: %s",
-                                                                                    topic, error.getMessage()),
-                                                                      error);
-                                                          }
-                                                          return Mono.empty();
-                                                      }))
+                       .flatMap(entry -> entry.apply(publishing)
+                                              .onErrorResume(error -> {
+                                                  if (log.isLoggable(Level.WARNING)) {
+                                                      log.log(Level.WARNING,
+                                                              String.format("Handler error for topic [%s]: %s",
+                                                                            topic, error.getMessage()),
+                                                              error);
+                                                  }
+                                                  return Mono.empty();
+                                              }))
                        .then();
         }
 
         /**
          * 清理资源
          */
-        void dispose() {
+        @Override
+        public void dispose() {
             if ((boolean) SUBSCRIBED.get(this) && connection.isAlive()) {
                 connection.unsubscribe(topic).subscribe(
                         v -> {
@@ -219,12 +236,6 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
             }
             SUBSCRIBED.set(this, false);
             handlers.clear();
-        }
-
-        /**
-         * 处理器条目（用于支持多个处理器）
-         */
-        private record HandlerEntry(Function<ClientReceivedPublish, Mono<Void>> handler) {
         }
     }
 }

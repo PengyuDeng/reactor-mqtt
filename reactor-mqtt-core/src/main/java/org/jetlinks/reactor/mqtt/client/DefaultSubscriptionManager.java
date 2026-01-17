@@ -54,11 +54,11 @@ class DefaultSubscriptionManager implements SubscriptionManager {
         // 获取或创建订阅处理器容器
         SubscriptionHandlers handlers = subscriptions.computeIfAbsent(
                 topicStr,
-                k -> new SubscriptionHandlers(topicStr, qos, connection)
+                k -> new DefaultSubscriptionHandlers(topicStr, qos, connection)
         );
 
         // 添加处理器并返回 Disposable
-        return handlers.addHandler(handler);
+        return handlers.addHandler(handler, null);
     }
 
     @Override
@@ -76,7 +76,7 @@ class DefaultSubscriptionManager implements SubscriptionManager {
     public Iterable<SubscriptionInfo> getSubscriptions() {
         return subscriptions.values()
                             .stream()
-                            .map(h -> (SubscriptionInfo) new SubscriptionInfoImpl(h.topic, h.qos))
+                            .map(DefaultSubscriptionInfo::of)
                             .collect(Collectors.toList());
     }
 
@@ -87,21 +87,15 @@ class DefaultSubscriptionManager implements SubscriptionManager {
     }
 
     /**
-     * 订阅信息实现
-     */
-    private record SubscriptionInfoImpl(String topic, MqttQoS qos) implements SubscriptionInfo {
-    }
-
-    /**
      * 订阅处理器容器，支持同一主题多个处理器
      */
-    private class SubscriptionHandlers {
+    private class DefaultSubscriptionHandlers implements SubscriptionHandlers {
         private static final VarHandle SUBSCRIBED;
 
         static {
             try {
                 MethodHandles.Lookup lookup = MethodHandles.lookup();
-                SUBSCRIBED = lookup.findVarHandle(SubscriptionHandlers.class, "subscribed", boolean.class);
+                SUBSCRIBED = lookup.findVarHandle(DefaultSubscriptionHandlers.class, "subscribed", boolean.class);
             } catch (NoSuchFieldException | IllegalAccessException e) {
                 throw new ExceptionInInitializerError(e);
             }
@@ -111,13 +105,34 @@ class DefaultSubscriptionManager implements SubscriptionManager {
         private final MqttQoS qos;
         private final ClientConnection connection;
         private final List<Function<ClientReceivedPublish, Mono<Void>>> handlers = new CopyOnWriteArrayList<>();
-        @SuppressWarnings("unused") // accessed via VarHandle
+        @SuppressWarnings("unused")
         private volatile boolean subscribed = false;
 
-        SubscriptionHandlers(String topic, MqttQoS qos, ClientConnection connection) {
+        DefaultSubscriptionHandlers(String topic, MqttQoS qos, ClientConnection connection) {
             this.topic = topic;
             this.qos = qos;
             this.connection = connection;
+        }
+
+        @Override
+        public String getTopic() {
+            return topic;
+        }
+
+        @Override
+        public MqttQoS getQos() {
+            return qos;
+        }
+
+        @Override
+        public ClientConnection getConnection() {
+            return connection;
+        }
+
+
+        @Override
+        public boolean isSubscribed() {
+            return (boolean) SUBSCRIBED.get(this);
         }
 
         /**
@@ -126,22 +141,27 @@ class DefaultSubscriptionManager implements SubscriptionManager {
          * @param handler 消息处理器
          * @return Disposable 用于移除此处理器
          */
-        Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler) {
+        @Override
+        public Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler, Runnable onLastRemoved) {
             handlers.add(handler);
 
             // 第一个处理器时执行实际订阅 - 使用CAS保证只执行一次
             if (SUBSCRIBED.compareAndSet(this, false, true)) {
                 // 首次订阅，发送 SUBSCRIBE 消息到服务器
-                if (connection instanceof DefaultClientConnection) {
-                    ((DefaultClientConnection) connection).doSubscribe(topic, qos)
-                        .subscribe(
-                            v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
-                            error -> {
-                                if (log.isLoggable(Level.WARNING)) {
-                                    log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error);
-                                }
-                            }
-                        );
+                if (connection instanceof DefaultClientConnection c) {
+                    c.doSubscribe(topic, qos)
+                     .subscribe(
+                             v -> {
+                                 if (log.isLoggable(Level.FINE)) {
+                                     log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic);
+                                 }
+                             },
+                             error -> {
+                                 if (log.isLoggable(Level.WARNING)) {
+                                     log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error);
+                                 }
+                             }
+                     );
                 }
             }
 
@@ -160,7 +180,8 @@ class DefaultSubscriptionManager implements SubscriptionManager {
         /**
          * 处理消息，调用所有处理器
          */
-        Mono<Void> handle(ClientReceivedPublish publishing) {
+        @Override
+        public Mono<Void> handle(ClientReceivedPublish publishing) {
             return Flux.fromIterable(handlers)
                        .flatMap(h -> h.apply(publishing)
                                       .onErrorResume(error -> {
@@ -178,7 +199,8 @@ class DefaultSubscriptionManager implements SubscriptionManager {
         /**
          * 清理资源
          */
-        void dispose() {
+        @Override
+        public void dispose() {
             if ((boolean) SUBSCRIBED.get(this) && connection.isAlive()) {
                 connection.unsubscribe(topic).subscribe(
                         v -> {
@@ -196,5 +218,6 @@ class DefaultSubscriptionManager implements SubscriptionManager {
             SUBSCRIBED.set(this, false);
             handlers.clear();
         }
+
     }
 }

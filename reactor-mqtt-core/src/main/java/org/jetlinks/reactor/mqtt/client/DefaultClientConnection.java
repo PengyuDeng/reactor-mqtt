@@ -214,7 +214,7 @@ public class DefaultClientConnection implements ClientConnection {
                                                                         .keepAlive(config.getKeepAlive())
                                                                         .cleanSession(config.isCleanSession());
 
-        if (config.getProtocolVersion() == 5) {
+        if (config.getProtocolVersion() == MqttVersion.MQTT_5) {
             builder.protocolVersion(MqttVersion.MQTT_5);
         }
 
@@ -237,7 +237,7 @@ public class DefaultClientConnection implements ClientConnection {
 
         return send(connectMessage)
                 .then(connAckSink.asMono()
-                                 .timeout(Duration.ofSeconds(10))
+                                 .timeout(config.getConnectTimeout())
                                  .flatMap(connAck -> {
                                      if (connAck
                                              .variableHeader()
@@ -699,14 +699,12 @@ public class DefaultClientConnection implements ClientConnection {
 
         heartbeatTimer = Flux.interval(Duration.ofSeconds(intervalSeconds), Schedulers.parallel())
                              .flatMap(tick -> sendPing())
-                             .subscribe(
-                                     v -> {
-                                     },
-                                     error -> {
-                                         if (log.isLoggable(Level.WARNING)) {
-                                             log.log(Level.WARNING, "Heartbeat error for client " + config.getClientId(), error);
-                                         }
-                                     }
+                             .subscribe(null,
+                                        error -> {
+                                            if (log.isLoggable(Level.WARNING)) {
+                                                log.log(Level.WARNING, "Heartbeat error for client " + config.getClientId(), error);
+                                            }
+                                        }
                              );
     }
 

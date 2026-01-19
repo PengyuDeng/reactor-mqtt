@@ -122,7 +122,7 @@ public interface MqttServer {
      *
      * <p>用于处理连接建立时的业务逻辑，如：</p>
      * <ul>
-     *   <li>注册消息监听器（{@link ServerConnection#handlePublishing}、{@link ServerConnection#onSubscribe} 等）</li>
+     *   <li>注册消息监听器（{@link ServerConnection#handlePublishing}、{@link ServerConnection#handleSubscribe} 等）</li>
      *   <li>检查客户端 ID 是否在黑名单</li>
      *   <li>限制最大连接数</li>
      *   <li>将连接注册到连接管理器</li>

@@ -89,12 +89,14 @@ public class DefaultClientConnection implements ClientConnection {
 
     private static final VarHandle STATE;
     private static final VarHandle MESSAGE_ID_GENERATOR;
+    private static final VarHandle CONNECTION;
 
     static {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             STATE = lookup.findVarHandle(DefaultClientConnection.class, "state", int.class);
             MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultClientConnection.class, "messageIdGenerator", int.class);
+            CONNECTION = lookup.findVarHandle(DefaultClientConnection.class, "connection", Connection.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -146,7 +148,7 @@ public class DefaultClientConnection implements ClientConnection {
                                    MqttClientConfig clientConfig,
                                    Supplier<TcpClient> tcpClientSupplier) {
 
-        this.connection = connection;
+        CONNECTION.set(this, connection);
         this.config = clientConfig;
         this.tcpClientSupplier = tcpClientSupplier;
         this.subscriptionManager = clientConfig.getSubscriptionManager() != null
@@ -174,11 +176,12 @@ public class DefaultClientConnection implements ClientConnection {
 
     private Mono<Void> ensureMqttCodec() {
         return Mono.fromRunnable(() -> {
-                       if (connection.channel().pipeline().get("mqttEncoder") == null) {
-                           connection.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
+                       Connection conn = (Connection) CONNECTION.get(this);
+                       if (conn.channel().pipeline().get("mqttEncoder") == null) {
+                           conn.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
                        }
-                       if (connection.channel().pipeline().get("mqttDecoder") == null) {
-                           connection.addHandlerFirst("mqttDecoder", new MqttDecoder(config.getMaxMessageSize()));
+                       if (conn.channel().pipeline().get("mqttDecoder") == null) {
+                           conn.addHandlerFirst("mqttDecoder", new MqttDecoder(config.getMaxMessageSize()));
                        }
                    })
                    .then()
@@ -191,17 +194,18 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     private void setupConnectionHandlers() {
-        connection.inbound()
-                  .receiveObject()
-                  .cast(MqttMessage.class)
-                  .flatMap(this::handleMessage)
-                  .subscribe(
-                          null,
-                          this::handleError,
-                          this::handleComplete
-                  );
+        Connection conn = (Connection) CONNECTION.get(this);
+        conn.inbound()
+            .receiveObject()
+            .cast(MqttMessage.class)
+            .flatMap(this::handleMessage)
+            .subscribe(
+                    null,
+                    this::handleError,
+                    this::handleComplete
+            );
 
-        connection.onDispose(() -> {
+        conn.onDispose(() -> {
             if (!hasFlag(CLOSED)) {
                 handleDisconnect();
             }
@@ -412,7 +416,7 @@ public class DefaultClientConnection implements ClientConnection {
               .flatMap(delay -> Mono.delay(delay)
                                     .then(tcpClientSupplier.get().connect())
                                     .flatMap(conn -> {
-                                        this.connection = conn;
+                                        CONNECTION.set(this, conn);
                                         return ensureMqttCodec()
                                                 .then(Mono.fromRunnable(this::setupConnectionHandlers))
                                                 .then(sendConnect());
@@ -602,7 +606,8 @@ public class DefaultClientConnection implements ClientConnection {
 
     @Override
     public boolean isAlive() {
-        return hasFlag(CONNECTED) && connection != null && connection.channel().isActive();
+        Connection conn = (Connection) CONNECTION.get(this);
+        return hasFlag(CONNECTED) && conn != null && conn.channel().isActive();
     }
 
     @Override
@@ -627,8 +632,9 @@ public class DefaultClientConnection implements ClientConnection {
             stopHeartbeat();
             clearFlag(CONNECTED);
 
-            if (connection != null) {
-                connection.dispose();
+            Connection conn = (Connection) CONNECTION.get(this);
+            if (conn != null) {
+                conn.dispose();
             }
             // 只在 closeSink 已创建时才发送信号
             if (closeSink != null) {
@@ -660,9 +666,10 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     Mono<Void> send(MqttMessage message) {
-        return connection.outbound()
-                         .sendObject(Mono.just(message))
-                         .then();
+        Connection conn = (Connection) CONNECTION.get(this);
+        return conn.outbound()
+                   .sendObject(Mono.just(message))
+                   .then();
     }
 
     /**

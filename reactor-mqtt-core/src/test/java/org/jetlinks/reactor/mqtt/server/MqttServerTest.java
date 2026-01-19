@@ -88,7 +88,7 @@ class MqttServerTest {
                         MqttServer.create()
                                   .host("127.0.0.1")
                                   .port(TEST_PORT)
-                                  .handle(connection -> connection.accept())
+                                  .handle(ServerConnection::accept)
                                   .bind()
                                   .doOnNext(s -> {
                                       server = s;
@@ -114,7 +114,7 @@ class MqttServerTest {
                            .maxMessageSize(16384)
                            .idleTimeout(Duration.ofSeconds(60))
                            .tcpNoDelay(true)
-                           .handle(connection -> connection.accept())
+                           .handle(ServerConnection::accept)
                            .bindNow();
 
         assertNotNull(server);
@@ -128,12 +128,12 @@ class MqttServerTest {
         // 测试多个服务端实例（不同端口）
         DisposableServer server1 = MqttServer.create()
                                               .port(TEST_PORT)
-                                              .handle(connection -> connection.accept())
+                                              .handle(ServerConnection::accept)
                                               .bindNow();
 
         DisposableServer server2 = MqttServer.create()
                                               .port(TEST_PORT + 1)
-                                              .handle(connection -> connection.accept())
+                                              .handle(ServerConnection::accept)
                                               .bindNow();
 
         try {
@@ -155,7 +155,7 @@ class MqttServerTest {
         // 测试服务端dispose等待完成
         server = MqttServer.create()
                            .port(TEST_PORT)
-                           .handle(connection -> connection.accept())
+                           .handle(ServerConnection::accept)
                            .bindNow();
 
         assertNotNull(server);

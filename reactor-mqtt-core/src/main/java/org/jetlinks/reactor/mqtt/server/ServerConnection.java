@@ -96,7 +96,7 @@ public interface ServerConnection extends MqttConnection {
      * @param subscription 订阅请求
      * @return this
      */
-    ServerConnection onSubscribe(Consumer<MqttSubscription> subscription);
+    ServerConnection handleSubscribe(Consumer<MqttSubscription> subscription);
 
     /**
      * 处理客户端的取消订阅请求
@@ -107,7 +107,7 @@ public interface ServerConnection extends MqttConnection {
      * @param unsubscription 取消订阅请求
      * @return @{code}code this
      */
-    ServerConnection onUnsubscribe(Consumer<MqttUnsubscription> unsubscription);
+    ServerConnection handleUnsubscribe(Consumer<MqttUnsubscription> unsubscription);
 
 
     /**

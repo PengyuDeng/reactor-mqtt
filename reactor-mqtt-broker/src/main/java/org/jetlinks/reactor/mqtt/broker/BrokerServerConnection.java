@@ -54,7 +54,7 @@ class BrokerServerConnection extends DefaultServerConnection {
             listener.onPublish(clientId, message).subscribe();
         });
 
-        super.onSubscribe(subscription -> {
+        super.handleSubscribe(subscription -> {
             String clientId = getClientId();
 
             // 从 MqttSubscribeMessage 中提取所有订阅主题
@@ -64,7 +64,7 @@ class BrokerServerConnection extends DefaultServerConnection {
             });
         });
 
-        super.onUnsubscribe(unsubscription -> {
+        super.handleUnsubscribe(unsubscription -> {
             String clientId = getClientId();
 
             // 从 MqttUnsubscribeMessage 中提取所有取消订阅的主题

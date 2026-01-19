@@ -127,7 +127,7 @@ public class DefaultServerConnection implements ServerConnection {
                 long timeout = (long) KEEP_ALIVE_TIMEOUT_MS.get(this);
 
                 if (now - lastPing > timeout) {
-                    log.warning("Client " + clientId + " keepalive timeout, closing connection");
+                    log.warning("Client " + CLIENT_ID.get(this) + " keepalive timeout, closing connection");
                     close().subscribe();
                 }
             });
@@ -220,8 +220,8 @@ public class DefaultServerConnection implements ServerConnection {
 
             if (type == MqttMessageType.CONNECT) {
                 MqttConnectMessage connectMsg = (MqttConnectMessage) msg;
-                this.connectMessage = connectMsg;
-                this.clientId = connectMsg.payload().clientIdentifier();
+                CONNECT_MESSAGE.set(this, connectMsg);
+                CLIENT_ID.set(this, connectMsg.payload().clientIdentifier());
                 int keepAliveSeconds = connectMsg.variableHeader().keepAliveTimeSeconds();
                 KEEP_ALIVE_TIMEOUT_MS.set(this, (keepAliveSeconds + 10) * 1000L);
                 emitValue(connectSink, connectMsg);
@@ -247,7 +247,8 @@ public class DefaultServerConnection implements ServerConnection {
 
     private Mono<Void> handlePublishSync(MqttPublishMessage msg) {
         // 如果有自定义的publish handler，调用它
-        if (publishHandler != null) {
+        Consumer<ServerReceivedPublish> handler = (Consumer<ServerReceivedPublish>) PUBLISH_HANDLER.get(this);
+        if (handler != null) {
             try {
                 ReferenceCountUtil.retain(msg);
             } catch (Exception e) {
@@ -256,19 +257,21 @@ public class DefaultServerConnection implements ServerConnection {
                 return Mono.empty();
             }
 
-            DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, clientId, this::send);
+            String currentClientId = (String) CLIENT_ID.get(this);
+            DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, currentClientId, this::send);
 
-            Mono<Void> handler = Mono.fromRunnable(() -> publishHandler.accept(publishing));
+            Mono<Void> handlerMono = Mono.fromRunnable(() -> handler.accept(publishing));
 
             if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
-                if (autoAck) {
-                    return handler.then(publishing.acknowledge())
+                boolean shouldAutoAck = (boolean) AUTO_ACK.get(this);
+                if (shouldAutoAck) {
+                    return handlerMono.then(publishing.acknowledge())
                                   .doFinally(signal -> publishing.release());
                 } else {
-                    return handler.doFinally(signal -> publishing.release());
+                    return handlerMono.doFinally(signal -> publishing.release());
                 }
             }
-            return handler.doFinally(signal -> publishing.release());
+            return handlerMono.doFinally(signal -> publishing.release());
         }
 
         return Mono.empty();
@@ -277,8 +280,9 @@ public class DefaultServerConnection implements ServerConnection {
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {
         DefaultMqttSubscription sub = new DefaultMqttSubscription(msg, this);
 
-        if (subscribeHandler != null) {
-            return Mono.fromRunnable(() -> subscribeHandler.accept(sub))
+        Consumer<MqttSubscription> handler = (Consumer<MqttSubscription>) SUBSCRIBE_HANDLER.get(this);
+        if (handler != null) {
+            return Mono.fromRunnable(() -> handler.accept(sub))
                        .then(Mono.defer(() -> Mono.from(sub.acknowledge())));
         }
 
@@ -288,8 +292,9 @@ public class DefaultServerConnection implements ServerConnection {
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
         DefaultMqttUnsubscription unsub = new DefaultMqttUnsubscription(msg, this);
 
-        if (unsubscribeHandler != null) {
-            return Mono.fromRunnable(() -> unsubscribeHandler.accept(unsub))
+        Consumer<MqttUnsubscription> handler = (Consumer<MqttUnsubscription>) UNSUBSCRIBE_HANDLER.get(this);
+        if (handler != null) {
+            return Mono.fromRunnable(() -> handler.accept(unsub))
                        .then(Mono.defer(() -> Mono.from(unsub.acknowledge())));
         }
 
@@ -330,16 +335,17 @@ public class DefaultServerConnection implements ServerConnection {
 
     @Override
     public String getClientId() {
-        return clientId;
+        return (String) CLIENT_ID.get(this);
     }
 
     @Override
     public MqttAuth getAuth() {
-        if (connectMessage == null || !connectMessage.variableHeader().hasUserName()) {
+        MqttConnectMessage currentConnectMessage = (MqttConnectMessage) CONNECT_MESSAGE.get(this);
+        if (currentConnectMessage == null || !currentConnectMessage.variableHeader().hasUserName()) {
             return MqttAuth.empty();
         }
-        String username = connectMessage.payload().userName();
-        byte[] pwd = connectMessage.payload().passwordInBytes();
+        String username = currentConnectMessage.payload().userName();
+        byte[] pwd = currentConnectMessage.payload().passwordInBytes();
         String password = pwd != null ? new String(pwd) : "";
         return new MqttAuth(username, password);
     }
@@ -372,7 +378,7 @@ public class DefaultServerConnection implements ServerConnection {
             return send(connAck)
                     .doOnSuccess(v -> {
                         if (log.isLoggable(Level.FINE)) {
-                            log.fine("MQTT client [" + clientId + "] connected");
+                            log.fine("MQTT client [" + CLIENT_ID.get(this) + "] connected");
                         }
                     });
         });
@@ -380,38 +386,39 @@ public class DefaultServerConnection implements ServerConnection {
 
     @Override
     public MqttWillMessage getWill() {
-        if (connectMessage == null || !connectMessage.variableHeader().isWillFlag()) {
+        MqttConnectMessage currentConnectMessage = (MqttConnectMessage) CONNECT_MESSAGE.get(this);
+        if (currentConnectMessage == null || !currentConnectMessage.variableHeader().isWillFlag()) {
             return MqttWillMessage.EMPTY;
         }
-        byte[] willPayload = connectMessage.payload().willMessageInBytes();
-        String topic = connectMessage.payload().willTopic();
+        byte[] willPayload = currentConnectMessage.payload().willMessageInBytes();
+        String topic = currentConnectMessage.payload().willTopic();
         ByteBuf payload = willPayload != null ? Unpooled.wrappedBuffer(willPayload) : null;
-        MqttQoS qos = MqttQoS.valueOf(connectMessage.variableHeader().willQos());
-        boolean retain = connectMessage.variableHeader().isWillRetain();
+        MqttQoS qos = MqttQoS.valueOf(currentConnectMessage.variableHeader().willQos());
+        boolean retain = currentConnectMessage.variableHeader().isWillRetain();
         return new MqttWillMessage(topic, payload, qos, retain, MqttProperties.NO_PROPERTIES);
     }
 
     @Override
     public ServerConnection handlePublishing(Consumer<ServerReceivedPublish> message) {
-        this.publishHandler = message;
+        PUBLISH_HANDLER.set(this, message);
         return this;
     }
 
     @Override
-    public ServerConnection onSubscribe(Consumer<MqttSubscription> subscription) {
-        this.subscribeHandler = subscription;
+    public ServerConnection handleSubscribe(Consumer<MqttSubscription> subscription) {
+        SUBSCRIBE_HANDLER.set(this, subscription);
         return this;
     }
 
     @Override
-    public ServerConnection onUnsubscribe(Consumer<MqttUnsubscription> unsubscription) {
-        this.unsubscribeHandler = unsubscription;
+    public ServerConnection handleUnsubscribe(Consumer<MqttUnsubscription> unsubscription) {
+        UNSUBSCRIBE_HANDLER.set(this, unsubscription);
         return this;
     }
 
     @Override
     public ServerConnection autoAck(boolean autoAck) {
-        this.autoAck = autoAck;
+        AUTO_ACK.set(this, autoAck);
         return this;
     }
 

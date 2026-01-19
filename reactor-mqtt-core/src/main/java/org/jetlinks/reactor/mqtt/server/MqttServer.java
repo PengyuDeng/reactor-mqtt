@@ -1,6 +1,7 @@
 package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.ssl.SslContext;
+import org.jspecify.annotations.Nullable;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.resources.LoopResources;
@@ -117,13 +118,34 @@ public interface MqttServer {
     MqttServer writeBufferWaterMark(int low, int high);
 
     /**
-     * 核心处理器：定义每一个连接建立时的行为
+     * 设置连接处理器，在认证通过后调用
      *
-     * @param handler 接收 {@link ServerConnection}，返回 Mono&lt;Void&gt;
-     *                (通常是 validate.then(accept))
+     * <p>用于处理连接建立时的业务逻辑，如：</p>
+     * <ul>
+     *   <li>注册消息监听器（{@link ServerConnection#handlePublishing}、{@link ServerConnection#onSubscribe} 等）</li>
+     *   <li>检查客户端 ID 是否在黑名单</li>
+     *   <li>限制最大连接数</li>
+     *   <li>将连接注册到连接管理器</li>
+     * </ul>
+     *
+     * <p>处理器必须调用 {@link ServerConnection#accept()} 或 {@link ServerConnection#reject} 来决定是否接受连接。</p>
+     *
+     * <pre>{@code
+     * MqttServer.create()
+     *     .authenticator(MqttAuthenticator.simple("user", "pass"))
+     *     .handle(connection -> {
+     *         connection.handlePublishing(msg -> {
+     *             System.out.println("Received: " + msg.getTopic());
+     *         });
+     *         return connection.accept();
+     *     })
+     *     .bindNow();
+     * }</pre>
+     *
+     * @param handler 连接处理器，接收 {@link ServerConnection}，返回 {@code Mono<Void>}
      * @return 当前实例
      */
-    MqttServer handle(Function<ServerConnection, Mono<Void>> handler);
+    MqttServer handle(@Nullable Function<ServerConnection, Mono<Void>> handler);
 
     /**
      * 设置认证器

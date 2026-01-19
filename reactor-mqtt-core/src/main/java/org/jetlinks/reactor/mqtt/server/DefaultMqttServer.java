@@ -222,10 +222,10 @@ public class DefaultMqttServer implements MqttServer {
     protected Mono<Void> invokeHandler(ServerConnection serverConnection) {
         // 先进行认证
         return authenticator.authenticate(serverConnection)
-                            .flatMap(authenticated -> {
-                                if (!authenticated) {
-                                    log.log(Level.WARNING, () -> "Client " + serverConnection.getClientId() + " authentication failed");
-                                    return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD);
+                            .flatMap(returnCode -> {
+                                if (returnCode != MqttConnectReturnCode.CONNECTION_ACCEPTED) {
+                                    log.log(Level.WARNING, () -> "Client " + serverConnection.getClientId() + " authentication failed: " + returnCode);
+                                    return serverConnection.reject(returnCode);
                                 }
 
                                 // 认证通过，执行用户的 handler

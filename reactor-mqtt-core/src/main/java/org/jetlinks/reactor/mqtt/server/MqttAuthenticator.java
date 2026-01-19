@@ -15,6 +15,7 @@
  */
 package org.jetlinks.reactor.mqtt.server;
 
+import io.netty.handler.codec.mqtt.MqttConnectReturnCode;
 import org.jetlinks.reactor.mqtt.MqttAuth;
 import reactor.core.publisher.Mono;
 
@@ -37,9 +38,10 @@ public interface MqttAuthenticator {
      * 验证客户端连接
      *
      * @param connection 服务端连接
-     * @return 认证结果，true 表示通过，false 表示拒绝
+     * @return 认证结果，返回 {@link MqttConnectReturnCode#CONNECTION_ACCEPTED} 表示通过，
+     *         其他返回码表示拒绝并说明拒绝原因
      */
-    Mono<Boolean> authenticate(ServerConnection connection);
+    Mono<MqttConnectReturnCode> authenticate(ServerConnection connection);
 
     /**
      * 创建一个简单的用户名/密码认证器
@@ -55,7 +57,7 @@ public interface MqttAuthenticator {
             // 检查是否提供了认证信息
             if (auth == null || !auth.hasAuth()) {
                 log.log(Level.WARNING, () -> "Client " + connection.getClientId() + " authentication failed: no credentials provided");
-                return false;
+                return MqttConnectReturnCode.CONNECTION_REFUSED_NOT_AUTHORIZED;
             }
 
             // 验证用户名和密码
@@ -64,11 +66,11 @@ public interface MqttAuthenticator {
 
             if (!isValid) {
                 log.log(Level.WARNING, () -> "Client " + connection.getClientId() + " authentication failed: invalid credentials");
+                return MqttConnectReturnCode.CONNECTION_REFUSED_BAD_USER_NAME_OR_PASSWORD;
             } else {
                 log.log(Level.FINE, () -> "Client " + connection.getClientId() + " authenticated successfully");
+                return MqttConnectReturnCode.CONNECTION_ACCEPTED;
             }
-
-            return isValid;
         });
     }
 
@@ -78,7 +80,7 @@ public interface MqttAuthenticator {
      * @return 认证器实例
      */
     static MqttAuthenticator allowAnonymous() {
-        return connection -> Mono.just(true);
+        return connection -> Mono.just(MqttConnectReturnCode.CONNECTION_ACCEPTED);
     }
 
     /**
@@ -87,6 +89,6 @@ public interface MqttAuthenticator {
      * @return 认证器实例
      */
     static MqttAuthenticator denyAll() {
-        return connection -> Mono.just(false);
+        return connection -> Mono.just(MqttConnectReturnCode.CONNECTION_REFUSED_NOT_AUTHORIZED);
     }
 }

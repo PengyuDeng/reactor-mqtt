@@ -16,6 +16,7 @@
 package org.jetlinks.reactor.mqtt;
 
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import io.netty.handler.codec.mqtt.MqttVersion;
 import reactor.core.publisher.Mono;
 
 /**
@@ -33,6 +34,13 @@ public interface MqttConnection {
      * @return 客户端 ID
      */
     String getClientId();
+
+    /**
+     * 获取 MQTT 协议版本
+     *
+     * @return MQTT 版本
+     */
+    MqttVersion getVersion();
 
     /**
      * 连接是否存活

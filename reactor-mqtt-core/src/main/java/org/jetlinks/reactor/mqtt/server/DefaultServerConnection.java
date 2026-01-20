@@ -20,6 +20,7 @@ import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
 import org.jetlinks.reactor.mqtt.MqttAuth;
+import org.jetlinks.reactor.mqtt.MqttConstants;
 import org.jetlinks.reactor.mqtt.MqttWillMessage;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
@@ -85,32 +86,37 @@ public class DefaultServerConnection implements ServerConnection {
 
     @SuppressWarnings("unused")
     private volatile String clientId = "unknown";
+
     @SuppressWarnings("unused")
     private volatile MqttConnectMessage connectMessage;
 
     @SuppressWarnings("unused")
     private volatile byte state = State.INIT;
+
     @SuppressWarnings("unused")
     private volatile long lastPingTime;
+
     @SuppressWarnings("unused")
     private volatile long keepAliveTimeoutMs = 120_000L;
 
-    private final Sinks.One<MqttConnectMessage> connectSink = Sinks.one();
-    private final Sinks.Empty<Void> disposeSink = Sinks.empty();
-
     @SuppressWarnings("unused")
     private volatile Consumer<ServerReceivedPublish> publishHandler;
+
     @SuppressWarnings("unused")
     private volatile Consumer<MqttSubscription> subscribeHandler;
+
     @SuppressWarnings("unused")
     private volatile Consumer<MqttUnsubscription> unsubscribeHandler;
+
     @SuppressWarnings("unused")
     private volatile boolean autoAck = true;
 
     @SuppressWarnings("unused")
     private volatile int messageId = 0;
 
-    private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(10);
+    private final Sinks.One<MqttConnectMessage> connectSink = Sinks.one();
+
+    private final Sinks.Empty<Void> disposeSink = Sinks.empty();
 
     public DefaultServerConnection(NettyInbound inbound, NettyOutbound outbound) {
         this.inbound = inbound;
@@ -266,7 +272,7 @@ public class DefaultServerConnection implements ServerConnection {
                 boolean shouldAutoAck = (boolean) AUTO_ACK.get(this);
                 if (shouldAutoAck) {
                     return handlerMono.then(publishing.acknowledge())
-                                  .doFinally(signal -> publishing.release());
+                                      .doFinally(signal -> publishing.release());
                 } else {
                     return handlerMono.doFinally(signal -> publishing.release());
                 }
@@ -330,12 +336,24 @@ public class DefaultServerConnection implements ServerConnection {
     }
 
     public Mono<MqttConnectMessage> awaitConnect() {
-        return connectSink.asMono().timeout(CONNECTION_TIMEOUT);
+        return connectSink.asMono().timeout(MqttConstants.Time.TEN_SECONDS);
     }
 
     @Override
     public String getClientId() {
         return (String) CLIENT_ID.get(this);
+    }
+
+    @Override
+    public MqttVersion getVersion() {
+        MqttConnectMessage msg = (MqttConnectMessage) CONNECT_MESSAGE.get(this);
+        if (msg == null) {
+            return MqttVersion.MQTT_3_1_1;
+        }
+        return MqttVersion.fromProtocolNameAndLevel(
+                msg.variableHeader().name(),
+                (byte) msg.variableHeader().version()
+        );
     }
 
     @Override

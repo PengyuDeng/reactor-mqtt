@@ -28,7 +28,7 @@ public class DefaultMqttUnsubscription implements MqttUnsubscription {
 
     private final MqttUnsubscribeMessage message;
     private final DefaultServerConnection connection;
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile boolean acknowledged = false;
 
     public DefaultMqttUnsubscription(MqttUnsubscribeMessage message, DefaultServerConnection connection) {

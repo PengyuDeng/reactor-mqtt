@@ -26,7 +26,7 @@ public class DefaultMqttSubscription implements MqttSubscription {
 
     private final MqttSubscribeMessage message;
     private final DefaultServerConnection connection;
-    @SuppressWarnings("unused") // accessed via VarHandle
+    @SuppressWarnings("unused")
     private volatile boolean acknowledged = false;
 
     public DefaultMqttSubscription(MqttSubscribeMessage message, DefaultServerConnection connection) {

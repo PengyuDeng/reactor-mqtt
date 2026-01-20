@@ -661,6 +661,11 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     @Override
+    public MqttVersion getVersion() {
+        return config.getProtocolVersion();
+    }
+
+    @Override
     public MqttQoS getQos() {
         return config.getQos();
     }

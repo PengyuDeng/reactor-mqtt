@@ -310,10 +310,10 @@ public class DefaultServerConnection implements ServerConnection {
         Consumer<MqttSubscription> handler = (Consumer<MqttSubscription>) SUBSCRIBE_HANDLER.get(this);
         if (handler != null) {
             return Mono.fromRunnable(() -> handler.accept(sub))
-                       .then(Mono.defer(() -> Mono.from(sub.acknowledge())));
+                       .then(sub.acknowledge());
         }
 
-        return Mono.from(sub.acknowledge());
+        return sub.acknowledge();
     }
 
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
@@ -322,10 +322,10 @@ public class DefaultServerConnection implements ServerConnection {
         Consumer<MqttUnsubscription> handler = (Consumer<MqttUnsubscription>) UNSUBSCRIBE_HANDLER.get(this);
         if (handler != null) {
             return Mono.fromRunnable(() -> handler.accept(unsub))
-                       .then(Mono.defer(() -> Mono.from(unsub.acknowledge())));
+                       .then(unsub.acknowledge());
         }
 
-        return Mono.from(unsub.acknowledge());
+        return unsub.acknowledge();
     }
 
     private Mono<Void> handlePubRec(MqttMessageIdVariableHeader header) {

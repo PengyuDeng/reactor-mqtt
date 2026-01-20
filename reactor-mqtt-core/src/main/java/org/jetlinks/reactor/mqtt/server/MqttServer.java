@@ -156,6 +156,18 @@ public interface MqttServer {
     MqttServer authenticator(MqttAuthenticator authenticator);
 
     /**
+     * 设置是否自动应答 QoS > 0 的消息
+     * <p>
+     * 当设置为 true（默认）时，服务端在处理完成后自动发送 ACK。
+     * 当设置为 false 时，需要处理者手动调用 {@link ServerReceivedPublish#acknowledge()} 进行应答。
+     * </p>
+     *
+     * @param autoAck true 自动应答（默认），false 手动应答
+     * @return 当前实例
+     */
+    MqttServer autoAck(boolean autoAck);
+
+    /**
      * 设置简单的用户名/密码认证
      *
      * @param username 用户名

@@ -119,9 +119,14 @@ public class DefaultServerConnection implements ServerConnection {
     private final Sinks.Empty<Void> disposeSink = Sinks.empty();
 
     public DefaultServerConnection(NettyInbound inbound, NettyOutbound outbound) {
+        this(inbound, outbound, true);
+    }
+
+    public DefaultServerConnection(NettyInbound inbound, NettyOutbound outbound, boolean autoAck) {
         this.inbound = inbound;
         this.outbound = outbound;
         this.connection = (Connection) inbound;
+        AUTO_ACK.set(this, autoAck);
         LAST_PING_TIME.set(this, System.currentTimeMillis());
 
         // 启动 KeepAlive 超时检测
@@ -252,34 +257,50 @@ public class DefaultServerConnection implements ServerConnection {
     }
 
     private Mono<Void> handlePublishSync(MqttPublishMessage msg) {
-        // 如果有自定义的publish handler，调用它
         Consumer<ServerReceivedPublish> handler = (Consumer<ServerReceivedPublish>) PUBLISH_HANDLER.get(this);
-        if (handler != null) {
-            try {
-                ReferenceCountUtil.retain(msg);
-            } catch (Exception e) {
-                log.warning("Failed to retain message: " + e.getMessage());
-                ReferenceCountUtil.safeRelease(msg);
-                return Mono.empty();
-            }
+        boolean shouldAutoAck = (boolean) AUTO_ACK.get(this) && msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE;
 
-            String currentClientId = (String) CLIENT_ID.get(this);
-            DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, currentClientId, this::send);
-
-            Mono<Void> handlerMono = Mono.fromRunnable(() -> handler.accept(publishing));
-
-            if (msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
-                boolean shouldAutoAck = (boolean) AUTO_ACK.get(this);
-                if (shouldAutoAck) {
-                    return handlerMono.then(publishing.acknowledge())
-                                      .doFinally(signal -> publishing.release());
-                } else {
-                    return handlerMono.doFinally(signal -> publishing.release());
-                }
-            }
-            return handlerMono.doFinally(signal -> publishing.release());
+        // 没有 handler 时，根据 autoAck 配置决定是否发送 ACK
+        if (handler == null && shouldAutoAck) {
+            return sendAck(msg);
         }
 
+        try {
+            ReferenceCountUtil.retain(msg);
+        } catch (Exception e) {
+            log.warning("Failed to retain message: " + e.getMessage());
+            ReferenceCountUtil.safeRelease(msg);
+            return Mono.empty();
+        }
+
+        DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, this);
+
+        Mono<Void> handlerMono = Mono.fromRunnable(() -> handler.accept(publishing));
+
+        if (shouldAutoAck) {
+            return handlerMono.then(publishing.acknowledge())
+                              .doFinally(signal -> publishing.release());
+        }
+        return handlerMono.doFinally(signal -> publishing.release());
+    }
+
+    private Mono<Void> sendAck(MqttPublishMessage msg) {
+        int messageId = msg.variableHeader().packetId();
+        MqttQoS qos = msg.fixedHeader().qosLevel();
+
+        if (qos == MqttQoS.AT_LEAST_ONCE) {
+            MqttPubAckMessage pubAck = new MqttPubAckMessage(
+                    new MqttFixedHeader(MqttMessageType.PUBACK, false, MqttQoS.AT_MOST_ONCE, false, 0),
+                    MqttMessageIdVariableHeader.from(messageId)
+            );
+            return send(pubAck);
+        } else if (qos == MqttQoS.EXACTLY_ONCE) {
+            MqttMessage pubRec = new MqttMessage(
+                    new MqttFixedHeader(MqttMessageType.PUBREC, false, MqttQoS.AT_MOST_ONCE, false, 0),
+                    MqttMessageIdVariableHeader.from(messageId)
+            );
+            return send(pubRec);
+        }
         return Mono.empty();
     }
 

@@ -61,6 +61,7 @@ public class DefaultMqttServer implements MqttServer {
     private int soBacklog = 1024;
     private int writeBufferLow = 32 * 1024;
     private int writeBufferHigh = 64 * 1024;
+    private boolean autoAck = true;
 
     /**
      * 创建一个新的 DefaultMqttServer 实例
@@ -167,6 +168,12 @@ public class DefaultMqttServer implements MqttServer {
     }
 
     @Override
+    public MqttServer autoAck(boolean autoAck) {
+        this.autoAck = autoAck;
+        return this;
+    }
+
+    @Override
     public Mono<? extends DisposableServer> bind() {
         return createTcpServer().bind();
     }
@@ -215,7 +222,7 @@ public class DefaultMqttServer implements MqttServer {
     }
 
     protected Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
-        return new DefaultServerConnection(inbound, outbound).run(this::invokeHandler);
+        return new DefaultServerConnection(inbound, outbound, autoAck).run(this::invokeHandler);
     }
 
 

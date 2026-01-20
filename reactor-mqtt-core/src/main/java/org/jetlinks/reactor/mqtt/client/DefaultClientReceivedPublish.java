@@ -88,8 +88,8 @@ class DefaultClientReceivedPublish implements ClientReceivedPublish {
     }
 
     @Override
-    public int getQosLevel() {
-        return message.fixedHeader().qosLevel().value();
+    public MqttQoS getQos() {
+        return message.fixedHeader().qosLevel();
     }
 
     @Override

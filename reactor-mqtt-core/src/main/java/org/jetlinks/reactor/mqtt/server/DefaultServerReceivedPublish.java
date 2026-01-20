@@ -23,7 +23,6 @@ import reactor.core.publisher.Mono;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
-import java.util.function.Function;
 
 import static org.jetlinks.reactor.mqtt.MqttConstants.MessageHeader.PUBREC_HEADER;
 
@@ -47,8 +46,7 @@ public class DefaultServerReceivedPublish implements ServerReceivedPublish {
     }
 
     private final MqttPublishMessage message;
-    private final String clientId;
-    private final Function<MqttMessage, Mono<Void>> sender;
+    private final DefaultServerConnection connection;
     @SuppressWarnings("unused") // accessed via VarHandle
     private volatile boolean acknowledged = false;
     @SuppressWarnings("unused") // accessed via VarHandle
@@ -57,10 +55,9 @@ public class DefaultServerReceivedPublish implements ServerReceivedPublish {
     // 新增：缓存解析后的主题层级
     private volatile String[] cachedTopicLevels;
 
-    public DefaultServerReceivedPublish(MqttPublishMessage message, String clientId, Function<MqttMessage, Mono<Void>> sender) {
+    DefaultServerReceivedPublish(MqttPublishMessage message, DefaultServerConnection connection) {
         this.message = message;
-        this.clientId = clientId;
-        this.sender = sender;
+        this.connection = connection;
     }
 
     @Override
@@ -88,7 +85,7 @@ public class DefaultServerReceivedPublish implements ServerReceivedPublish {
 
     @Override
     public String getClientId() {
-        return clientId;
+        return connection.getClientId();
     }
 
     @Override
@@ -97,8 +94,8 @@ public class DefaultServerReceivedPublish implements ServerReceivedPublish {
     }
 
     @Override
-    public int getQosLevel() {
-        return message.fixedHeader().qosLevel().value();
+    public MqttQoS getQos() {
+        return message.fixedHeader().qosLevel();
     }
 
     @Override
@@ -133,24 +130,21 @@ public class DefaultServerReceivedPublish implements ServerReceivedPublish {
                 return Mono.empty();
             }
 
-            MqttQoS qos = message.fixedHeader().qosLevel();
-            Mono<Void> ackMono;
+            MqttQoS qos = getQos();
 
             if (qos == MqttQoS.AT_LEAST_ONCE) {
                 MqttMessage pubAck = MqttMessageBuilders.pubAck()
                                                         .packetId(message.variableHeader().packetId())
                                                         .build();
-                ackMono = sender.apply(pubAck);
+                return connection.send(pubAck);
             } else if (qos == MqttQoS.EXACTLY_ONCE) {
                 MqttMessage pubRec = new MqttMessage(
                         PUBREC_HEADER,
                         MqttMessageIdVariableHeader.from(message.variableHeader().packetId()));
-                ackMono = sender.apply(pubRec);
-            } else {
-                ackMono = Mono.empty();
+                return connection.send(pubRec);
             }
 
-            return ackMono;
+            return Mono.empty();
         });
     }
 

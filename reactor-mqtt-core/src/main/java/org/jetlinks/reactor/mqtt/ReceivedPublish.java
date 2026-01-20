@@ -18,6 +18,7 @@ package org.jetlinks.reactor.mqtt;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttProperties;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import io.netty.handler.codec.mqtt.MqttQoS;
 
 /**
  * MQTT 收到的 PUBLISH 消息
@@ -79,9 +80,9 @@ public interface ReceivedPublish extends Acknowledge {
     /**
      * 获取 QoS 级别
      *
-     * @return QoS 级别（0, 1, 2）
+     * @return QoS 级别
      */
-    int getQosLevel();
+    MqttQoS getQos();
 
     /**
      * 是否为重复消息

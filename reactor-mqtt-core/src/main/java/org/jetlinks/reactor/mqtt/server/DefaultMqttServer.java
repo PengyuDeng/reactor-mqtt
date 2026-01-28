@@ -46,130 +46,114 @@ public class DefaultMqttServer implements MqttServer {
 
     private static final Logger log = Logger.getLogger(DefaultMqttServer.class.getName());
 
-    private String host = "127.0.0.1";
-    private int port = 1883;
-    private int maxMessageSize = 8096;
-    private Duration idleTimeout = Duration.ofSeconds(120);
-    private SslContext sslContext;
-    private Function<ServerConnection, Mono<Void>> connectionHandler;
-    private MqttAuthenticator authenticator = MqttAuthenticator.allowAnonymous();
-
-    private LoopResources loopResources;
-    private int workerCount = Runtime.getRuntime().availableProcessors();
-    private boolean tcpNoDelay = true;
-    private boolean tcpKeepAlive = true;
-    private int soBacklog = 1024;
-    private int writeBufferLow = 32 * 1024;
-    private int writeBufferHigh = 64 * 1024;
-    private boolean autoAck = true;
+    private final MqttServerConfig config;
 
     /**
      * 创建一个新的 DefaultMqttServer 实例
      */
     public DefaultMqttServer() {
+        this.config = new MqttServerConfig();
+    }
+
+    /**
+     * 创建一个使用指定配置的 DefaultMqttServer 实例
+     *
+     * @param config 服务端配置
+     */
+    public DefaultMqttServer(MqttServerConfig config) {
+        this.config = config != null ? config : new MqttServerConfig();
+    }
+
+    /**
+     * 获取服务端配置
+     *
+     * @return 服务端配置
+     */
+    public MqttServerConfig getConfig() {
+        return config;
     }
 
     @Override
     public MqttServer host(String host) {
-        if (host == null || host.isBlank()) {
-            throw new IllegalArgumentException("host must not be null or blank");
-        }
-        this.host = host;
+        config.setHost(host);
         return this;
     }
 
     @Override
     public MqttServer port(int port) {
-        if (port < 0 || port > 65535) {
-            throw new IllegalArgumentException("Port must be between 0 and 65535, got: " + port);
-        }
-        this.port = port;
+        config.setPort(port);
         return this;
     }
 
+    @Override
     public MqttServer maxMessageSize(int maxMessageSize) {
-        if (maxMessageSize <= 0) {
-            throw new IllegalArgumentException("maxMessageSize must be positive, got: " + maxMessageSize);
-        }
-        this.maxMessageSize = maxMessageSize;
+        config.setMaxMessageSize(maxMessageSize);
         return this;
     }
 
+    @Override
     public MqttServer idleTimeout(Duration idleTimeout) {
-        if (idleTimeout != null && idleTimeout.isNegative()) {
-            throw new IllegalArgumentException("idleTimeout must not be negative, got: " + idleTimeout);
-        }
-        this.idleTimeout = idleTimeout;
+        config.setIdleTimeout(idleTimeout);
         return this;
     }
 
+    @Override
     public MqttServer ssl(SslContext sslContext) {
-        this.sslContext = sslContext;
+        config.setSslContext(sslContext);
         return this;
     }
 
+    @Override
     public MqttServer loopResources(LoopResources loopResources) {
-        this.loopResources = loopResources;
+        config.setLoopResources(loopResources);
         return this;
     }
 
+    @Override
     public MqttServer workerCount(int workerCount) {
-        if (workerCount <= 0) {
-            throw new IllegalArgumentException("workerCount must be positive, got: " + workerCount);
-        }
-        this.workerCount = workerCount;
+        config.setWorkerCount(workerCount);
         return this;
     }
 
+    @Override
     public MqttServer tcpNoDelay(boolean tcpNoDelay) {
-        this.tcpNoDelay = tcpNoDelay;
+        config.setTcpNoDelay(tcpNoDelay);
         return this;
     }
 
+    @Override
     public MqttServer tcpKeepAlive(boolean tcpKeepAlive) {
-        this.tcpKeepAlive = tcpKeepAlive;
+        config.setTcpKeepAlive(tcpKeepAlive);
         return this;
     }
 
+    @Override
     public MqttServer soBacklog(int soBacklog) {
-        if (soBacklog <= 0) {
-            throw new IllegalArgumentException("soBacklog must be positive, got: " + soBacklog);
-        }
-        this.soBacklog = soBacklog;
+        config.setSoBacklog(soBacklog);
         return this;
     }
 
+    @Override
     public MqttServer writeBufferWaterMark(int low, int high) {
-        if (low <= 0) {
-            throw new IllegalArgumentException("writeBufferLow must be positive, got: " + low);
-        }
-        if (high <= 0) {
-            throw new IllegalArgumentException("writeBufferHigh must be positive, got: " + high);
-        }
-        if (low > high) {
-            throw new IllegalArgumentException("writeBufferLow must be <= writeBufferHigh, got low: " + low + ", high: " + high);
-        }
-        this.writeBufferLow = low;
-        this.writeBufferHigh = high;
+        config.setWriteBufferWaterMark(low, high);
         return this;
     }
 
     @Override
     public MqttServer handle(Function<ServerConnection, Mono<Void>> handler) {
-        this.connectionHandler = handler;
+        config.setConnectionHandler(handler);
         return this;
     }
 
-
     @Override
     public MqttServer authenticator(MqttAuthenticator authenticator) {
-        this.authenticator = authenticator != null ? authenticator : MqttAuthenticator.allowAnonymous();
+        config.setAuthenticator(authenticator);
         return this;
     }
 
     @Override
     public MqttServer autoAck(boolean autoAck) {
-        this.autoAck = autoAck;
+        config.setAutoAck(autoAck);
         return this;
     }
 
@@ -183,50 +167,54 @@ public class DefaultMqttServer implements MqttServer {
         return createTcpServer().bindNow();
     }
 
+    @Override
     public DisposableServer bindNow(Duration timeout) {
         return createTcpServer().bindNow(timeout);
     }
 
     private TcpServer createTcpServer() {
         TcpServer server = TcpServer.create()
-                                    .host(host)
-                                    .port(port)
+                                    .host(config.getHost())
+                                    .port(config.getPort())
                                     .runOn(getLoopResources())
                                     .option(ChannelOption.SO_REUSEADDR, true)
-                                    .option(ChannelOption.SO_BACKLOG, soBacklog)
-                                    .childOption(ChannelOption.TCP_NODELAY, tcpNoDelay)
-                                    .childOption(ChannelOption.SO_KEEPALIVE, tcpKeepAlive)
-                                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(writeBufferLow, writeBufferHigh))
+                                    .option(ChannelOption.SO_BACKLOG, config.getSoBacklog())
+                                    .childOption(ChannelOption.TCP_NODELAY, config.isTcpNoDelay())
+                                    .childOption(ChannelOption.SO_KEEPALIVE, config.isTcpKeepAlive())
+                                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                                                 new WriteBufferWaterMark(config.getWriteBufferLow(), config.getWriteBufferHigh()))
                                     .doOnConnection(this::initPipeline)
                                     .handle(this::handle);
 
-        return sslContext != null
-                ? server.secure(spec -> spec.sslContext(sslContext))
+        return config.getSslContext() != null
+                ? server.secure(spec -> spec.sslContext(config.getSslContext()))
                 : server;
     }
 
-
     private LoopResources getLoopResources() {
-        return loopResources != null
-                ? loopResources
-                : LoopResources.create("mqtt-", workerCount, true);
+        return config.getLoopResources() != null
+                ? config.getLoopResources()
+                : LoopResources.create("mqtt-", config.getWorkerCount(), true);
     }
 
     private void initPipeline(Connection connection) {
         connection.addHandlerFirst("mqttEncoder", MqttEncoder.INSTANCE);
-        connection.addHandlerFirst("mqttDecoder", new MqttDecoder(maxMessageSize));
+        connection.addHandlerFirst("mqttDecoder", new MqttDecoder(config.getMaxMessageSize()));
 
+        Duration idleTimeout = config.getIdleTimeout();
         if (idleTimeout != null && !idleTimeout.isZero()) {
             connection.addHandlerFirst("idleStateHandler", new IdleStateHandler(0, 0, idleTimeout.toSeconds(), TimeUnit.SECONDS));
         }
     }
 
     protected Publisher<Void> handle(NettyInbound inbound, NettyOutbound outbound) {
-        return new DefaultServerConnection(inbound, outbound, autoAck).run(this::invokeHandler);
+        return new DefaultServerConnection(inbound, outbound, config.isAutoAck()).run(this::invokeHandler);
     }
 
-
     protected Mono<Void> invokeHandler(ServerConnection serverConnection) {
+        MqttAuthenticator authenticator = config.getAuthenticator();
+        Function<ServerConnection, Mono<Void>> connectionHandler = config.getConnectionHandler();
+
         // 先进行认证
         return authenticator.authenticate(serverConnection)
                             .flatMap(returnCode -> {

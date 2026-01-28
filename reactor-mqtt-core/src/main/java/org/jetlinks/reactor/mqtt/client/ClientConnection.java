@@ -19,6 +19,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.MqttConnection;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Collection;
@@ -151,4 +152,22 @@ public interface ClientConnection extends MqttConnection {
      * @return 断开完成的 Mono
      */
     Mono<Void> disconnect();
+
+    /**
+     * 监听重连成功事件
+     *
+     * <p>每次重连成功时都会发射重连次数，可以持续监听多次重连事件。</p>
+     *
+     * <h3>使用示例：</h3>
+     * <pre>{@code
+     * connection.onReconnect()
+     *     .subscribe(attempt -> {
+     *         System.out.println("Reconnected after " + attempt + " attempts!");
+     *         // 可以在此处执行重连后的初始化操作
+     *     });
+     * }</pre>
+     *
+     * @return 重连成功时发射重连次数的 Flux
+     */
+    Flux<Integer> onReconnect();
 }

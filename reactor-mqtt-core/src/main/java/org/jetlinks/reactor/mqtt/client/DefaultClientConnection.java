@@ -122,6 +122,12 @@ public class DefaultClientConnection implements ClientConnection {
     private volatile Sinks.One<MqttConnAckMessage> connAckSink;
 
     /**
+     * 重连成功信号发射器,用于 onReconnect() 方法
+     * 发射重连次数
+     */
+    private final Sinks.Many<Integer> reconnectSink = Sinks.many().multicast().onBackpressureBuffer();
+
+    /**
      * MQTT 消息 ID 生成器,使用 VarHandle 保证原子性和可见性
      * 范围 1-65535,循环使用
      */
@@ -413,6 +419,14 @@ public class DefaultClientConnection implements ClientConnection {
 
         config.getReconnectStrategy()
               .nextDelay(attempt, null)
+              .switchIfEmpty(Mono.defer(() -> {
+                  if (log.isLoggable(Level.WARNING)) {
+                      log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
+                  }
+                  clearFlag(RECONNECTING);
+                  close().subscribe();
+                  return Mono.empty();
+              }))
               .flatMap(delay -> Mono.delay(delay)
                                     .then(tcpClientSupplier.get().connect())
                                     .flatMap(conn -> {
@@ -433,11 +447,14 @@ public class DefaultClientConnection implements ClientConnection {
                           attemptReconnect();
                       },
                       () -> {
+                          // 重连成功
                           clearFlag(RECONNECTING);
-                          if (log.isLoggable(Level.WARNING)) {
-                              log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
+                          if (log.isLoggable(Level.INFO)) {
+                              log.log(Level.INFO, () -> "Reconnect successful for client " + config.getClientId());
                           }
-                          close().subscribe();
+                          if (reconnectSink.currentSubscriberCount() > 0) {
+                              reconnectSink.tryEmitNext(attempt);
+                          }
                       }
               );
     }
@@ -636,10 +653,10 @@ public class DefaultClientConnection implements ClientConnection {
             if (conn != null) {
                 conn.dispose();
             }
-            // 只在 closeSink 已创建时才发送信号
             if (closeSink != null) {
                 closeSink.tryEmitEmpty();
             }
+            reconnectSink.tryEmitComplete();
             return Mono.empty();
         });
     }
@@ -653,6 +670,11 @@ public class DefaultClientConnection implements ClientConnection {
             return send(MqttMessage.DISCONNECT)
                     .then(close());
         });
+    }
+
+    @Override
+    public Flux<Integer> onReconnect() {
+        return reconnectSink.asFlux();
     }
 
     @Override

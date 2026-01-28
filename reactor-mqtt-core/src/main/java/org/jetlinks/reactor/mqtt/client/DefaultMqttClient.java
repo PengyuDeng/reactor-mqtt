@@ -29,6 +29,7 @@ import reactor.netty.resources.LoopResources;
 import reactor.netty.tcp.TcpClient;
 
 import java.time.Duration;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -63,7 +64,7 @@ class DefaultMqttClient implements MqttClient {
     }
 
     @Override
-    public MqttClient handlePublishing(java.util.function.Function<ClientReceivedPublish, Mono<Void>> handler) {
+    public MqttClient handlePublishing(Function<ClientReceivedPublish, Mono<Void>> handler) {
         config.setPublishingHandler(handler);
         return this;
     }

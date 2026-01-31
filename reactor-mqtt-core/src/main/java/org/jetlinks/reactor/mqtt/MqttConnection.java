@@ -19,6 +19,8 @@ import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.codec.mqtt.MqttVersion;
 import reactor.core.publisher.Mono;
 
+import java.net.InetSocketAddress;
+
 /**
  * MQTT 连接基础接口
  *
@@ -41,6 +43,24 @@ public interface MqttConnection {
      * @return MQTT 版本
      */
     MqttVersion getVersion();
+
+    /**
+     * 获取远程地址（对端地址）
+     *
+     * <p>对于服务端连接，返回客户端的地址；对于客户端连接，返回服务端的地址。</p>
+     *
+     * @return 远程地址，如果连接已关闭可能返回 null
+     */
+    InetSocketAddress getRemoteAddress();
+
+    /**
+     * 获取本地地址
+     *
+     * <p>返回本地绑定的地址和端口。</p>
+     *
+     * @return 本地地址，如果连接已关闭可能返回 null
+     */
+    InetSocketAddress getLocalAddress();
 
     /**
      * 连接是否存活

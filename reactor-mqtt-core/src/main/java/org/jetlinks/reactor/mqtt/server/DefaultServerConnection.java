@@ -138,7 +138,7 @@ public class DefaultServerConnection implements ServerConnection {
                 long timeout = (long) KEEP_ALIVE_TIMEOUT_MS.get(this);
 
                 if (now - lastPing > timeout) {
-                    log.warning("Client " + CLIENT_ID.get(this) + " keepalive timeout, closing connection");
+                    log.log(Level.WARNING, () -> "Client " + CLIENT_ID.get(this) + " keepalive timeout, closing connection");
                     close().subscribe();
                 }
             });
@@ -212,15 +212,15 @@ public class DefaultServerConnection implements ServerConnection {
 
     private void emitEmpty(Sinks.Empty<Void> sink) {
         Sinks.EmitResult result = sink.tryEmitEmpty();
-        if (result.isFailure() && log.isLoggable(Level.FINE)) {
-            log.fine("Emit empty failed: " + result);
+        if (result.isFailure()) {
+            log.log(Level.FINE, () -> "Emit empty failed: " + result);
         }
     }
 
     private <T> void emitValue(Sinks.One<T> sink, T value) {
         Sinks.EmitResult result = sink.tryEmitValue(value);
-        if (result.isFailure() && log.isLoggable(Level.FINE)) {
-            log.fine("Emit value failed: " + result);
+        if (result.isFailure()) {
+            log.log(Level.FINE, () -> "Emit value failed: " + result);
         }
     }
 
@@ -268,7 +268,7 @@ public class DefaultServerConnection implements ServerConnection {
         try {
             ReferenceCountUtil.retain(msg);
         } catch (Exception e) {
-            log.warning("Failed to retain message: " + e.getMessage());
+            log.log(Level.WARNING, () -> "Failed to retain message: " + e.getMessage());
             ReferenceCountUtil.safeRelease(msg);
             return Mono.empty();
         }
@@ -366,6 +366,16 @@ public class DefaultServerConnection implements ServerConnection {
     }
 
     @Override
+    public InetSocketAddress getRemoteAddress() {
+        return (InetSocketAddress) connection.channel().remoteAddress();
+    }
+
+    @Override
+    public InetSocketAddress getLocalAddress() {
+        return (InetSocketAddress) connection.channel().localAddress();
+    }
+
+    @Override
     public MqttVersion getVersion() {
         MqttConnectMessage msg = (MqttConnectMessage) CONNECT_MESSAGE.get(this);
         if (msg == null) {
@@ -415,11 +425,7 @@ public class DefaultServerConnection implements ServerConnection {
                                                             .sessionPresent(false)
                                                             .build();
             return send(connAck)
-                    .doOnSuccess(v -> {
-                        if (log.isLoggable(Level.FINE)) {
-                            log.fine("MQTT client [" + CLIENT_ID.get(this) + "] connected");
-                        }
-                    });
+                    .doOnSuccess(v -> log.log(Level.FINE, () -> "MQTT client [" + CLIENT_ID.get(this) + "] connected"));
         });
     }
 
@@ -561,15 +567,6 @@ public class DefaultServerConnection implements ServerConnection {
     @Override
     public Mono<Void> setKeepAliveTimeout(Duration duration) {
         return Mono.fromRunnable(() -> KEEP_ALIVE_TIMEOUT_MS.set(this, duration.toMillis()));
-    }
-
-    @Override
-    public InetSocketAddress getClientAddress() {
-        try {
-            return (InetSocketAddress) connection.channel().remoteAddress();
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     /**

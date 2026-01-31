@@ -168,17 +168,6 @@ public interface MqttServer {
     MqttServer autoAck(boolean autoAck);
 
     /**
-     * 设置简单的用户名/密码认证
-     *
-     * @param username 用户名
-     * @param password 密码
-     * @return 当前实例
-     */
-    default MqttServer auth(String username, String password) {
-        return authenticator(MqttAuthenticator.simple(username, password));
-    }
-
-    /**
      * 阻塞并绑定端口，启动服务
      *
      * @return DisposableServer 实例

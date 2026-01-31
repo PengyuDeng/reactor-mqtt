@@ -112,11 +112,11 @@ class BrokerMessageRouter implements ServerConnectionListener {
 
         ServerConnection old = connections.put(clientId, connection);
         if (old != null && old != connection) {
-            log.log(Level.INFO, "Client " + clientId + " reconnected, closing old connection");
+            log.log(Level.INFO, () -> "Client " + clientId + " reconnected, closing old connection");
             old.close().subscribe();
         }
 
-        log.log(Level.FINE, "Registered connection for client: " + clientId);
+        log.log(Level.FINE, () -> "Registered connection for client: " + clientId);
     }
 
     /**
@@ -127,7 +127,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
     private void unregisterConnection(String clientId) {
         connections.remove(clientId);
         // Trie 树会在 onConnectionClosed 中统一清理
-        log.log(Level.FINE, "Unregistered connection for client: " + clientId);
+        log.log(Level.FINE, () -> "Unregistered connection for client: " + clientId);
     }
 
     /**
@@ -138,7 +138,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      */
     private void addSubscription(String clientId, String topic) {
         subscriptionTrie.addSubscription(ParsedTopic.parse(topic).getLevels(), clientId);
-        log.log(Level.FINE, "Client " + clientId + " subscribed to: " + topic);
+        log.log(Level.FINE, () -> "Client " + clientId + " subscribed to: " + topic);
     }
 
     /**
@@ -149,7 +149,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      */
     private void removeSubscription(String clientId, String topic) {
         subscriptionTrie.removeSubscription(ParsedTopic.parse(topic).getLevels(), clientId);
-        log.log(Level.FINE, "Client " + clientId + " unsubscribed from: " + topic);
+        log.log(Level.FINE, () -> "Client " + clientId + " unsubscribed from: " + topic);
     }
 
     /**
@@ -169,17 +169,17 @@ class BrokerMessageRouter implements ServerConnectionListener {
         Set<String> matchedClients = subscriptionTrie.findMatches(ParsedTopic.parse(topic).getLevels());
 
         if (matchedClients.isEmpty()) {
-            log.log(Level.FINE, "No subscribers for topic: " + topic);
+            log.log(Level.FINE, () -> "No subscribers for topic: " + topic);
             return Mono.empty();
         }
 
-        log.log(Level.FINE, "Publishing to topic " + topic + " for " + matchedClients.size() + " clients");
+        log.log(Level.FINE, () -> "Publishing to topic " + topic + " for " + matchedClients.size() + " clients");
 
         return Flux.fromIterable(matchedClients)
                    .flatMap(clientId -> {
                        ServerConnection connection = connections.get(clientId);
                        if (connection == null) {
-                           log.log(Level.WARNING, "Client " + clientId + " not found in connections");
+                           log.log(Level.WARNING, () -> "Client " + clientId + " not found in connections");
                            return Mono.empty();
                        }
 

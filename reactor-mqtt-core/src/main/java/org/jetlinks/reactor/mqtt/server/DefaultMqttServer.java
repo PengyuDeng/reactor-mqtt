@@ -229,9 +229,7 @@ public class DefaultMqttServer implements MqttServer {
                                 }
                                 return connectionHandler.apply(serverConnection)
                                                         .onErrorResume(err -> {
-                                                            if (log.isLoggable(Level.SEVERE)) {
-                                                                log.log(Level.SEVERE, "Error handling MQTT connection for client " + serverConnection.getClientId() + ": " + err.getMessage(), err);
-                                                            }
+                                                            log.log(Level.SEVERE, err, () -> "Error handling MQTT connection for client " + serverConnection.getClientId() + ": " + err.getMessage());
                                                             return serverConnection.reject(MqttConnectReturnCode.CONNECTION_REFUSED_SERVER_UNAVAILABLE);
                                                         });
                             });

@@ -174,11 +174,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                     c.doSubscribe(topic, qos)
                      .subscribe(
                              v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
-                             error -> {
-                                 if (log.isLoggable(Level.WARNING)) {
-                                     log.log(Level.WARNING, "Failed to subscribe to topic: " + topic, error);
-                                 }
-                             }
+                             error -> log.log(Level.WARNING, error, () -> "Failed to subscribe to topic: " + topic)
                      );
                 }
             }
@@ -205,12 +201,9 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
             return Flux.fromIterable(handlers)
                        .flatMap(entry -> entry.apply(publishing)
                                               .onErrorResume(error -> {
-                                                  if (log.isLoggable(Level.WARNING)) {
-                                                      log.log(Level.WARNING,
-                                                              String.format("Handler error for topic [%s]: %s",
-                                                                            topic, error.getMessage()),
-                                                              error);
-                                                  }
+                                                  log.log(Level.WARNING, error,
+                                                          () -> String.format("Handler error for topic [%s]: %s",
+                                                                              topic, error.getMessage()));
                                                   return Mono.empty();
                                               }))
                        .then();
@@ -227,9 +220,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                                      error -> {
                                          // 只记录非超时错误
                                          if (!(error instanceof java.util.concurrent.TimeoutException)) {
-                                             if (log.isLoggable(Level.WARNING)) {
-                                                 log.log(Level.WARNING, "Failed to unsubscribe from topic: " + topic, error);
-                                             }
+                                             log.log(Level.WARNING, error, () -> "Failed to unsubscribe from topic: " + topic);
                                          }
                                      }
                           );

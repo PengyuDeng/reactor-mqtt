@@ -31,6 +31,7 @@ import reactor.netty.tcp.TcpClient;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
@@ -192,9 +193,7 @@ public class DefaultClientConnection implements ClientConnection {
                    })
                    .then()
                    .onErrorResume(e -> {
-                       if (log.isLoggable(Level.WARNING)) {
-                           log.log(Level.WARNING, "Failed to add MQTT codec: " + e.getMessage(), e);
-                       }
+                       log.log(Level.WARNING, e, () -> "Failed to add MQTT codec: " + e.getMessage());
                        return Mono.empty();
                    });
     }
@@ -383,9 +382,7 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     private void handleError(Throwable error) {
-        if (log.isLoggable(Level.WARNING)) {
-            log.log(Level.WARNING, "Connection error for client " + config.getClientId() + ": " + error.getMessage(), error);
-        }
+        log.log(Level.WARNING, error, () -> "Connection error for client " + config.getClientId() + ": " + error.getMessage());
         handleDisconnect();
     }
 
@@ -420,9 +417,7 @@ public class DefaultClientConnection implements ClientConnection {
         config.getReconnectStrategy()
               .nextDelay(attempt, null)
               .switchIfEmpty(Mono.defer(() -> {
-                  if (log.isLoggable(Level.WARNING)) {
-                      log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
-                  }
+                  log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
                   clearFlag(RECONNECTING);
                   close().subscribe();
                   return Mono.empty();
@@ -441,17 +436,13 @@ public class DefaultClientConnection implements ClientConnection {
                       v -> clearFlag(RECONNECTING),
                       error -> {
                           clearFlag(RECONNECTING);
-                          if (log.isLoggable(Level.WARNING)) {
-                              log.log(Level.WARNING, () -> "Reconnect failed for client " + config.getClientId() + ": " + error.getMessage());
-                          }
+                          log.log(Level.WARNING, () -> "Reconnect failed for client " + config.getClientId() + ": " + error.getMessage());
                           attemptReconnect();
                       },
                       () -> {
                           // 重连成功
                           clearFlag(RECONNECTING);
-                          if (log.isLoggable(Level.INFO)) {
-                              log.log(Level.INFO, () -> "Reconnect successful for client " + config.getClientId());
-                          }
+                          log.log(Level.INFO, () -> "Reconnect successful for client " + config.getClientId());
                           if (reconnectSink.currentSubscriberCount() > 0) {
                               reconnectSink.tryEmitNext(attempt);
                           }
@@ -683,6 +674,18 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     @Override
+    public InetSocketAddress getRemoteAddress() {
+        Connection conn = (Connection) CONNECTION.get(this);
+        return conn != null ? (InetSocketAddress) conn.channel().remoteAddress() : null;
+    }
+
+    @Override
+    public InetSocketAddress getLocalAddress() {
+        Connection conn = (Connection) CONNECTION.get(this);
+        return conn != null ? (InetSocketAddress) conn.channel().localAddress() : null;
+    }
+
+    @Override
     public MqttVersion getVersion() {
         return config.getProtocolVersion();
     }
@@ -727,18 +730,13 @@ public class DefaultClientConnection implements ClientConnection {
             intervalSeconds = 1;
         }
 
-        if (log.isLoggable(Level.FINE)) {
-            log.fine("Starting heartbeat for client " + config.getClientId() + " with interval " + intervalSeconds + "s");
-        }
+        long finalIntervalSeconds = intervalSeconds;
+        log.log(Level.FINE, () -> "Starting heartbeat for client " + config.getClientId() + " with interval " + finalIntervalSeconds + "s");
 
         heartbeatTimer = Flux.interval(Duration.ofSeconds(intervalSeconds), Schedulers.parallel())
                              .flatMap(tick -> sendPing())
                              .subscribe(null,
-                                        error -> {
-                                            if (log.isLoggable(Level.WARNING)) {
-                                                log.log(Level.WARNING, "Heartbeat error for client " + config.getClientId(), error);
-                                            }
-                                        }
+                                        error -> log.log(Level.WARNING, error, () -> "Heartbeat error for client " + config.getClientId())
                              );
     }
 
@@ -750,9 +748,7 @@ public class DefaultClientConnection implements ClientConnection {
         if (timer != null && !timer.isDisposed()) {
             timer.dispose();
             heartbeatTimer = null;
-            if (log.isLoggable(Level.FINE)) {
-                log.fine("Stopped heartbeat for client " + config.getClientId());
-            }
+            log.log(Level.FINE, () -> "Stopped heartbeat for client " + config.getClientId());
         }
     }
 
@@ -764,16 +760,8 @@ public class DefaultClientConnection implements ClientConnection {
             return Mono.empty();
         }
         return send(MqttMessage.PINGREQ)
-                .doOnSuccess(v -> {
-                    if (log.isLoggable(Level.FINEST)) {
-                        log.finest("Sending PINGREQ for client " + config.getClientId());
-                    }
-                })
-                .doOnError(error -> {
-                    if (log.isLoggable(Level.WARNING)) {
-                        log.log(Level.WARNING, "Failed to send PINGREQ for client " + config.getClientId(), error);
-                    }
-                });
+                .doOnSuccess(v -> log.log(Level.FINEST, () -> "Sending PINGREQ for client " + config.getClientId()))
+                .doOnError(error -> log.log(Level.WARNING, error, () -> "Failed to send PINGREQ for client " + config.getClientId()));
     }
 
     private boolean hasFlag(int flag) {

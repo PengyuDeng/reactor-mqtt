@@ -16,6 +16,8 @@
 package org.jetlinks.reactor.mqtt.broker;
 
 import io.netty.handler.codec.mqtt.MqttConnectReturnCode;
+import org.jetlinks.reactor.mqtt.server.MqttAuthenticator;
+import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 
 import java.time.Duration;
@@ -35,7 +37,7 @@ public class MqttBrokerAuthExample {
         DisposableServer broker = MqttBroker.create()
                                             .host("0.0.0.0")
                                             .port(1883)
-                                            .auth("admin", "password123")  // 设置用户名和密码
+                                            .authenticator(MqttAuthenticator.simple("admin", "password123"))  // 设置用户名和密码
                                             .idleTimeout(Duration.ofSeconds(120))
                                             .bindNow();
 
@@ -64,7 +66,7 @@ public class MqttBrokerAuthExample {
                                                 log.info("Authenticating client: " + clientId + ", username: " + username);
 
                                                 // 这里可以实现更复杂的认证逻辑
-                                                return reactor.core.publisher.Mono.just(MqttConnectReturnCode.CONNECTION_ACCEPTED);
+                                                return Mono.just(MqttConnectReturnCode.CONNECTION_ACCEPTED);
                                             })
                                             .bindNow();
 

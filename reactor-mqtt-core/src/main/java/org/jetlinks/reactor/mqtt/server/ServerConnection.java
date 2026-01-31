@@ -148,9 +148,4 @@ public interface ServerConnection extends MqttConnection {
      * 设置 keepAlive 超时时间
      */
     Mono<Void> setKeepAliveTimeout(Duration duration);
-
-    /**
-     * 获取客户端地址
-     */
-    InetSocketAddress getClientAddress();
 }

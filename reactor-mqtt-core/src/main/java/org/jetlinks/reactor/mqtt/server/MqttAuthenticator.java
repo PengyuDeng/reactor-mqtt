@@ -54,13 +54,11 @@ public interface MqttAuthenticator {
         return connection -> Mono.fromSupplier(() -> {
             MqttAuth auth = connection.getAuth();
 
-            // 检查是否提供了认证信息
             if (auth == null || !auth.hasAuth()) {
                 log.log(Level.WARNING, () -> "Client " + connection.getClientId() + " authentication failed: no credentials provided");
                 return MqttConnectReturnCode.CONNECTION_REFUSED_NOT_AUTHORIZED;
             }
 
-            // 验证用户名和密码
             boolean isValid = Objects.equals(username, auth.getUsername())
                            && Objects.equals(password, auth.getPassword());
 

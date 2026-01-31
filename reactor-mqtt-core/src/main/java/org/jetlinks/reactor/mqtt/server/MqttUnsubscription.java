@@ -27,7 +27,8 @@ public interface MqttUnsubscription extends Acknowledge {
 
     /**
      * 获取原始取消订阅消息
+     *
+     * @return 取消订阅消息
      */
     MqttUnsubscribeMessage getMessage();
-
 }

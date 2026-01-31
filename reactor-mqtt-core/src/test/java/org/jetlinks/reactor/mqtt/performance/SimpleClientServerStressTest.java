@@ -71,6 +71,7 @@ public class SimpleClientServerStressTest {
                     // 处理客户端发布的消息
                     connection.handlePublishing(msg -> {
                         serverReceivedCount.incrementAndGet();
+                        return Mono.empty();
                     });
 
                     // 接受连接
@@ -229,7 +230,7 @@ public class SimpleClientServerStressTest {
                     // 2. 订阅主题
                     client.subscribe(SERVER_TO_CLIENT_TOPIC, MqttQoS.AT_LEAST_ONCE, msg -> {
                         clientReceivedCount.incrementAndGet();
-                        return msg.acknowledge();
+                        return msg.ack();
                     });
 
                     System.out.println("预热 " + WARMUP_SECONDS + " 秒...");

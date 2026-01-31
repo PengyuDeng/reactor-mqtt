@@ -309,7 +309,7 @@ public class DefaultClientConnection implements ClientConnection {
 
         // 自动确认
         if (config.isAutoAck() && msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE) {
-            handlerMono = handlerMono.then(publishing.acknowledge());
+            handlerMono = handlerMono.then(publishing.ack());
         }
 
         return handlerMono.doFinally(signal -> publishing.release())

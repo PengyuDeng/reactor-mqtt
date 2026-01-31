@@ -13,21 +13,38 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.jetlinks.reactor.mqtt.server;
+package org.jetlinks.reactor.mqtt;
 
-import org.jetlinks.reactor.mqtt.MqttPublishing;
+import io.netty.handler.codec.mqtt.MqttProperties;
+import io.netty.handler.codec.mqtt.MqttPublishMessage;
 
 /**
- * 服务端接收到的发布消息
+ * MQTT 发布消息接口
+ *
+ * <p>封装接收到的 MQTT PUBLISH 消息，提供简洁的访问方法和应答机制。</p>
  *
  * @author PengyuDeng
  */
-public interface ServerReceivedPublish extends MqttPublishing {
+public interface MqttPublishing extends Acknowledge {
 
     /**
-     * 获取发送消息的客户端 ID
+     * 获取消息主题
      *
-     * @return 客户端 ID
+     * @return 主题对象
      */
-    String clientId();
+    Topic topic();
+
+    /**
+     * 获取原始 MQTT 发布消息
+     *
+     * @return 原始消息对象
+     */
+    MqttPublishMessage message();
+
+    /**
+     * 获取 MQTT 5.0 属性
+     *
+     * @return MQTT 属性
+     */
+    MqttProperties properties();
 }

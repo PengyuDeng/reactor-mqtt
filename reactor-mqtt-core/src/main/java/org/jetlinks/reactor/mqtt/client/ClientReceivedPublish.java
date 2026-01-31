@@ -15,14 +15,14 @@
  */
 package org.jetlinks.reactor.mqtt.client;
 
-import org.jetlinks.reactor.mqtt.ReceivedPublish;
+import org.jetlinks.reactor.mqtt.MqttPublishing;
 
 /**
  * MQTT 客户端接收到的发布消息
  *
- * <p>封装从服务端接收到的 PUBLISH 消息，提供便捷的访问方法。</p>
+ * <p>封装从服务端接收到的 PUBLISH 消息。</p>
  *
  * @author PengyuDeng
  */
-public interface ClientReceivedPublish extends ReceivedPublish {
+public interface ClientReceivedPublish extends MqttPublishing {
 }

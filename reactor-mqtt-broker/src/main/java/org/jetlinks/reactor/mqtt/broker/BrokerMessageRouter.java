@@ -19,7 +19,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.MqttMessageBuilders;
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import io.netty.handler.codec.mqtt.MqttQoS;
-import org.jetlinks.reactor.mqtt.ParsedTopic;
+import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import org.jetlinks.reactor.mqtt.server.ServerConnection;
 import reactor.core.publisher.Flux;
@@ -137,7 +137,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param topic    订阅的主题（可能包含通配符）
      */
     private void addSubscription(String clientId, String topic) {
-        subscriptionTrie.addSubscription(ParsedTopic.parse(topic).getLevels(), clientId);
+        subscriptionTrie.addSubscription(Topic.of(topic).getLevels(), clientId);
         log.log(Level.FINE, () -> "Client " + clientId + " subscribed to: " + topic);
     }
 
@@ -148,7 +148,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param topic    要取消订阅的主题
      */
     private void removeSubscription(String clientId, String topic) {
-        subscriptionTrie.removeSubscription(ParsedTopic.parse(topic).getLevels(), clientId);
+        subscriptionTrie.removeSubscription(Topic.of(topic).getLevels(), clientId);
         log.log(Level.FINE, () -> "Client " + clientId + " unsubscribed from: " + topic);
     }
 
@@ -166,7 +166,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
      */
     private Mono<Void> publish(String publisherClientId, String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
         // 使用 Trie 树快速查找所有匹配的订阅者 - O(L) 复杂度
-        Set<String> matchedClients = subscriptionTrie.findMatches(ParsedTopic.parse(topic).getLevels());
+        Set<String> matchedClients = subscriptionTrie.findMatches(Topic.of(topic).getLevels());
 
         if (matchedClients.isEmpty()) {
             log.log(Level.FINE, () -> "No subscribers for topic: " + topic);

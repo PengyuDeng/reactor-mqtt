@@ -5,6 +5,7 @@ import reactor.core.publisher.Mono;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
+import java.util.Arrays;
 
 /**
  * MQTT 订阅请求实现
@@ -40,20 +41,38 @@ public class DefaultMqttSubscription implements MqttSubscription {
     }
 
     @Override
-    public Mono<Void> acknowledge() {
-        return Mono.defer(() -> {
-            if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
-                return Mono.empty();
-            }
+    public Mono<Void> ack() {
 
-            MqttSubAckMessage subAck = MqttMessageBuilders.subAck()
-                                                          .packetId(message.variableHeader().messageId())
-                                                          .addGrantedQoses(message.payload().topicSubscriptions()
-                                                                                  .stream()
-                                                                                  .map(MqttTopicSubscription::qualityOfService)
-                                                                                  .toArray(MqttQoS[]::new))
-                                                          .build();
-            return connection.send(subAck);
-        });
+        if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
+            return Mono.empty();
+        }
+
+        MqttSubAckMessage subAck = MqttMessageBuilders.subAck()
+                                                      .packetId(message.variableHeader().messageId())
+                                                      .addGrantedQoses(message.payload().topicSubscriptions()
+                                                                              .stream()
+                                                                              .map(MqttTopicSubscription::qualityOfService)
+                                                                              .toArray(MqttQoS[]::new))
+                                                      .build();
+        return connection.send(subAck);
+
+    }
+
+    @Override
+    public Mono<Void> nack(MqttProperties properties) {
+
+        if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
+            return Mono.empty();
+        }
+
+        int topicCount = message.payload().topicSubscriptions().size();
+        MqttQoS[] errorCodes = new MqttQoS[topicCount];
+        Arrays.fill(errorCodes, MqttQoS.FAILURE);
+
+        MqttSubAckMessage subAck = MqttMessageBuilders.subAck()
+                                                      .packetId(message.variableHeader().messageId())
+                                                      .addGrantedQoses(errorCodes)
+                                                      .build();
+        return connection.send(subAck);
     }
 }

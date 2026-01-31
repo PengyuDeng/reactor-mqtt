@@ -23,7 +23,7 @@ import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * MQTT 服务端连接接口 - 纯响应式 API
@@ -33,18 +33,14 @@ import java.util.function.Consumer;
  * <pre>{@code
  * MqttServer.create()
  *     .handle(connection -> {
- *         connection.listener(new MqttMessageListener() {
- *             @Override
- *             public Mono<Void> onPublish(MqttPublishing message) {
- *                 System.out.println("Received: " + message.getTopic());
- *                 return Mono.empty();
- *             }
+ *         connection.handlePublishing(message -> {
+ *             System.out.println("Received: " + message.topic());
+ *             return Mono.empty();
+ *         });
  *
- *             @Override
- *             public Mono<Void> onSubscribe(MqttSubscription subscription) {
- *                 System.out.println("Subscribe: " + subscription.getMessage());
- *                 return Mono.empty();
- *             }
+ *         connection.handleSubscribe(subscription -> {
+ *             System.out.println("Subscribe: " + subscription.getMessage());
+ *             return Mono.empty();
  *         });
  *
  *         return connection.accept();
@@ -80,52 +76,49 @@ public interface ServerConnection extends MqttConnection {
      * 处理客户端发布的消息
      *
      * <p>当客户端发布消息到服务器时调用此方法。
-     * 对于 QoS 1/2 消息，ACK 会在此方法返回的 Mono 完成后自动发送。</p>
+     * 对于 QoS 1/2 消息，ACK 会在返回的 Mono 完成后自动发送。</p>
      *
-     * @param message 发布的消息
+     * @param handler 消息处理器，返回处理完成的 Mono
      * @return this
      */
-    ServerConnection handlePublishing(Consumer<ServerReceivedPublish> message);
+    ServerConnection handlePublishing(Function<ServerReceivedPublish, Mono<Void>> handler);
 
     /**
      * 处理客户端的订阅请求
      *
      * <p>当客户端发送订阅请求时调用此方法。
-     * SUBACK 会在此方法返回的 Mono 完成后自动发送。</p>
+     * SUBACK 会在返回的 Mono 完成后自动发送。</p>
      *
-     * @param subscription 订阅请求
+     * @param handler 订阅处理器，返回处理完成的 Mono
      * @return this
      */
-    ServerConnection handleSubscribe(Consumer<MqttSubscription> subscription);
+    ServerConnection handleSubscribe(Function<MqttSubscription, Mono<Void>> handler);
 
     /**
      * 处理客户端的取消订阅请求
      *
      * <p>当客户端发送取消订阅请求时调用此方法。
-     * UNSUBACK 会在此方法返回的 Mono 完成后自动发送。</p>
+     * UNSUBACK 会在返回的 Mono 完成后自动发送。</p>
      *
-     * @param unsubscription 取消订阅请求
-     * @return @{code}code this
+     * @param handler 取消订阅处理器，返回处理完成的 Mono
+     * @return this
      */
-    ServerConnection handleUnsubscribe(Consumer<MqttUnsubscription> unsubscription);
+    ServerConnection handleUnsubscribe(Function<MqttUnsubscription, Mono<Void>> handler);
 
 
     /**
      * 设置是否自动应答 QoS > 0 的消息
      * <p>
-     * 当设置为 true（默认）时，服务端在 {@link MqttMessageListener#onPublish} 处理完成后自动发送 ACK。
-     * 当设置为 false 时，需要处理者手动调用 {@link ServerReceivedPublish#acknowledge()} 进行应答。
+     * 当设置为 true（默认）时，服务端在处理完成后自动发送 ACK。
+     * 当设置为 false 时，需要处理者手动调用 {@link ServerReceivedPublish#ack()} 进行应答。
      * </p>
      *
      * <p>手动应答示例：</p>
      * <pre>{@code
      * connection.autoAck(false)
-     *           .listener(new MqttMessageListener() {
-     *               @Override
-     *               public Mono<Void> onPublish(MqttPublishing message) {
-     *                   return saveToDatabase(message)
-     *                       .then(message.acknowledge());  // 持久化成功后再应答
-     *               }
+     *           .handlePublishing(message -> {
+     *               return saveToDatabase(message)
+     *                   .then(message.ack());  // 持久化成功后再应答
      *           });
      * }</pre>
      *

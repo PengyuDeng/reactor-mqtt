@@ -17,6 +17,7 @@ package org.jetlinks.reactor.mqtt.client;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.server.MqttServer;
+import org.jetlinks.reactor.mqtt.server.ServerConnection;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,7 +47,7 @@ class MqttClientTest {
         server = MqttServer.create()
                            .host("127.0.0.1")
                            .port(TEST_PORT)
-                           .handle(connection -> connection.accept())
+                           .handle(ServerConnection::accept)
                            .bindNow();
     }
 

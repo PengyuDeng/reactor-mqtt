@@ -63,7 +63,7 @@ class DefaultSubscriptionManager implements SubscriptionManager {
 
     @Override
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
-        String topic = publishing.getTopic();
+        String topic = publishing.topic().getValue();
 
         return Flux.fromIterable(subscriptions.entrySet())
                    .filter(entry -> TopicMatcher.matches(entry.getKey(), topic))
@@ -139,12 +139,6 @@ class DefaultSubscriptionManager implements SubscriptionManager {
             return (boolean) SUBSCRIBED.get(this);
         }
 
-        /**
-         * 添加处理器
-         *
-         * @param handler 消息处理器
-         * @return Disposable 用于移除此处理器
-         */
         @Override
         public Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler, Runnable onLastRemoved) {
             handlers.add(handler);
@@ -173,9 +167,6 @@ class DefaultSubscriptionManager implements SubscriptionManager {
             };
         }
 
-        /**
-         * 处理消息，调用所有处理器
-         */
         @Override
         public Mono<Void> handle(ClientReceivedPublish publishing) {
             return Flux.fromIterable(handlers)
@@ -189,9 +180,6 @@ class DefaultSubscriptionManager implements SubscriptionManager {
                        .then();
         }
 
-        /**
-         * 清理资源
-         */
         @Override
         public void dispose() {
             if ((boolean) SUBSCRIBED.get(this) && connection.isAlive()) {

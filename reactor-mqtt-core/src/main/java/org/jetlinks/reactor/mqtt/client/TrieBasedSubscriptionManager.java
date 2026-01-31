@@ -17,6 +17,7 @@ package org.jetlinks.reactor.mqtt.client;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.ParsedTopic;
+import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -58,7 +59,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         String topicStr = topic.toString();
 
         // 获取或创建订阅处理器容器
-        String[] levels = ParsedTopic.parse(topicStr).getLevels();
+        String[] levels = Topic.of(topicStr).getLevels();
         SubscriptionHandlers handlers = subscriptionsMap.computeIfAbsent(
                 topicStr,
                 k -> {
@@ -79,7 +80,7 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
 
     @Override
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
-        String[] topicLevels = publishing.getTopicLevels();
+        String[] topicLevels = publishing.topic().getLevels();
 
         Set<SubscriptionHandlers> matchedHandlers = trie.findMatches(topicLevels);
 
@@ -156,13 +157,6 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
             return (boolean) SUBSCRIBED.get(this);
         }
 
-        /**
-         * 添加处理器
-         *
-         * @param handler       消息处理器
-         * @param onLastRemoved 当最后一个处理器被移除时的回调
-         * @return Disposable 用于移除此处理器
-         */
         @Override
         public Disposable addHandler(Function<ClientReceivedPublish, Mono<Void>> handler, Runnable onLastRemoved) {
             handlers.add(handler);
@@ -193,9 +187,6 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
             };
         }
 
-        /**
-         * 处理消息，调用所有处理器
-         */
         @Override
         public Mono<Void> handle(ClientReceivedPublish publishing) {
             return Flux.fromIterable(handlers)
@@ -209,9 +200,6 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
                        .then();
         }
 
-        /**
-         * 清理资源
-         */
         @Override
         public void dispose() {
             if ((boolean) SUBSCRIBED.get(this) && connection.isAlive()) {

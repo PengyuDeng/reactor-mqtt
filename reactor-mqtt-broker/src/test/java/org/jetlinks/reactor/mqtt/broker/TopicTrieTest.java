@@ -16,6 +16,7 @@
 package org.jetlinks.reactor.mqtt.broker;
 
 import org.jetlinks.reactor.mqtt.ParsedTopic;
+import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,59 +41,59 @@ class TopicTrieTest {
 
     @Test
     void testExactMatch() {
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client1");
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/temperature").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/temperature").getLevels());
         assertEquals(1, matches.size());
         assertTrue(matches.contains("client1"));
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/humidity").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/humidity").getLevels());
         assertTrue(matches.isEmpty());
     }
 
     @Test
     void testSingleWildcard() {
-        trie.addSubscription(ParsedTopic.parse("sensor/+/temperature").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/+/temperature").getLevels(), "client1");
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/room1/temperature").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/room1/temperature").getLevels());
         assertEquals(1, matches.size());
         assertTrue(matches.contains("client1"));
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/room2/temperature").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/room2/temperature").getLevels());
         assertEquals(1, matches.size());
         assertTrue(matches.contains("client1"));
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/room1/room2/temperature").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/room1/room2/temperature").getLevels());
         assertTrue(matches.isEmpty());
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/temperature").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/temperature").getLevels());
         assertTrue(matches.isEmpty());
     }
 
     @Test
     void testMultiWildcard() {
-        trie.addSubscription(ParsedTopic.parse("sensor/#").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/#").getLevels(), "client1");
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/temperature").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/temperature").getLevels());
         assertEquals(1, matches.size());
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/room1/temperature").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/room1/temperature").getLevels());
         assertEquals(1, matches.size());
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/room1/room2/temperature").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/room1/room2/temperature").getLevels());
         assertEquals(1, matches.size());
 
-        matches = trie.findMatches(ParsedTopic.parse("device/temperature").getLevels());
+        matches = trie.findMatches(Topic.of("device/temperature").getLevels());
         assertTrue(matches.isEmpty());
     }
 
     @Test
     void testMultipleSubscribers() {
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client2");
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client3");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client2");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client3");
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/temperature").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/temperature").getLevels());
         assertEquals(3, matches.size());
         assertTrue(matches.contains("client1"));
         assertTrue(matches.contains("client2"));
@@ -101,11 +102,11 @@ class TopicTrieTest {
 
     @Test
     void testOverlappingSubscriptions() {
-        trie.addSubscription(ParsedTopic.parse("sensor/+/temperature").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/#").getLevels(), "client2");
-        trie.addSubscription(ParsedTopic.parse("sensor/room1/temperature").getLevels(), "client3");
+        trie.addSubscription(Topic.of("sensor/+/temperature").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/#").getLevels(), "client2");
+        trie.addSubscription(Topic.of("sensor/room1/temperature").getLevels(), "client3");
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/room1/temperature").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/room1/temperature").getLevels());
         assertEquals(3, matches.size());
         assertTrue(matches.contains("client1"));
         assertTrue(matches.contains("client2"));
@@ -114,98 +115,98 @@ class TopicTrieTest {
 
     @Test
     void testRemoveSubscription() {
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client2");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client2");
 
-        boolean removed = trie.removeSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client1");
+        boolean removed = trie.removeSubscription(Topic.of("sensor/temperature").getLevels(), "client1");
         assertTrue(removed);
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/temperature").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/temperature").getLevels());
         assertEquals(1, matches.size());
         assertTrue(matches.contains("client2"));
 
-        removed = trie.removeSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client2");
+        removed = trie.removeSubscription(Topic.of("sensor/temperature").getLevels(), "client2");
         assertTrue(removed);
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/temperature").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/temperature").getLevels());
         assertTrue(matches.isEmpty());
     }
 
     @Test
     void testRemoveAllSubscriptions() {
-        trie.addSubscription(ParsedTopic.parse("sensor/temp").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/humidity").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("device/status").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/temp").getLevels(), "client2");
+        trie.addSubscription(Topic.of("sensor/temp").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/humidity").getLevels(), "client1");
+        trie.addSubscription(Topic.of("device/status").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/temp").getLevels(), "client2");
 
         trie.removeAll("client1");
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/temp").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/temp").getLevels());
         assertEquals(1, matches.size());
         assertTrue(matches.contains("client2"));
 
-        matches = trie.findMatches(ParsedTopic.parse("sensor/humidity").getLevels());
+        matches = trie.findMatches(Topic.of("sensor/humidity").getLevels());
         assertTrue(matches.isEmpty());
 
-        matches = trie.findMatches(ParsedTopic.parse("device/status").getLevels());
+        matches = trie.findMatches(Topic.of("device/status").getLevels());
         assertTrue(matches.isEmpty());
     }
 
     @Test
     void testGetSubscriberCount() {
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/temperature").getLevels(), "client2");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/temperature").getLevels(), "client2");
 
-        assertEquals(2, trie.getSubscriberCount(ParsedTopic.parse("sensor/temperature").getLevels()));
-        assertEquals(0, trie.getSubscriberCount(ParsedTopic.parse("sensor/humidity").getLevels()));
+        assertEquals(2, trie.getSubscriberCount(Topic.of("sensor/temperature").getLevels()));
+        assertEquals(0, trie.getSubscriberCount(Topic.of("sensor/humidity").getLevels()));
     }
 
     @Test
     void testGetTotalSubscriptionCount() {
-        trie.addSubscription(ParsedTopic.parse("sensor/temp").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/temp").getLevels(), "client2");
-        trie.addSubscription(ParsedTopic.parse("sensor/humidity").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("device/#").getLevels(), "client3");
+        trie.addSubscription(Topic.of("sensor/temp").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/temp").getLevels(), "client2");
+        trie.addSubscription(Topic.of("sensor/humidity").getLevels(), "client1");
+        trie.addSubscription(Topic.of("device/#").getLevels(), "client3");
 
         assertEquals(4, trie.getTotalSubscriptionCount());
     }
 
     @Test
     void testClear() {
-        trie.addSubscription(ParsedTopic.parse("sensor/temp").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("sensor/humidity").getLevels(), "client2");
+        trie.addSubscription(Topic.of("sensor/temp").getLevels(), "client1");
+        trie.addSubscription(Topic.of("sensor/humidity").getLevels(), "client2");
 
         trie.clear();
 
         assertEquals(0, trie.getTotalSubscriptionCount());
-        assertTrue(trie.findMatches(ParsedTopic.parse("sensor/temp").getLevels()).isEmpty());
+        assertTrue(trie.findMatches(Topic.of("sensor/temp").getLevels()).isEmpty());
     }
 
     @Test
     void testEdgeCases() {
         assertThrows(IllegalArgumentException.class, () ->
-                trie.addSubscription(ParsedTopic.parse("").getLevels(), "client1"));
+                trie.addSubscription(Topic.of("").getLevels(), "client1"));
 
         assertThrows(IllegalArgumentException.class, () ->
                 trie.addSubscription((String[]) null, "client1"));
 
         assertThrows(IllegalArgumentException.class, () ->
-                trie.addSubscription(ParsedTopic.parse("sensor/temp").getLevels(), null));
+                trie.addSubscription(Topic.of("sensor/temp").getLevels(), null));
 
         assertThrows(IllegalArgumentException.class, () ->
-                trie.addSubscription(ParsedTopic.parse("sensor/#/temp").getLevels(), "client1"));
+                trie.addSubscription(Topic.of("sensor/#/temp").getLevels(), "client1"));
     }
 
     @Test
     void testComplexTopics() {
-        trie.addSubscription(ParsedTopic.parse("a/b/c/d/e").getLevels(), "client1");
-        trie.addSubscription(ParsedTopic.parse("a/+/c/+/e").getLevels(), "client2");
-        trie.addSubscription(ParsedTopic.parse("a/#").getLevels(), "client3");
+        trie.addSubscription(Topic.of("a/b/c/d/e").getLevels(), "client1");
+        trie.addSubscription(Topic.of("a/+/c/+/e").getLevels(), "client2");
+        trie.addSubscription(Topic.of("a/#").getLevels(), "client3");
 
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("a/b/c/d/e").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("a/b/c/d/e").getLevels());
         assertEquals(3, matches.size());
 
-        matches = trie.findMatches(ParsedTopic.parse("a/x/c/y/e").getLevels());
+        matches = trie.findMatches(Topic.of("a/x/c/y/e").getLevels());
         assertEquals(2, matches.size());
         assertTrue(matches.contains("client2"));
         assertTrue(matches.contains("client3"));
@@ -216,11 +217,11 @@ class TopicTrieTest {
         int subscriptionCount = 10_000;
         for (int i = 0; i < subscriptionCount; i++) {
             String topic = "sensor/room" + (i % 100) + "/device" + (i % 50) + "/metric" + (i % 20);
-            trie.addSubscription(ParsedTopic.parse(topic).getLevels(), "client" + i);
+            trie.addSubscription(Topic.of(topic).getLevels(), "client" + i);
         }
 
         long startTime = System.nanoTime();
-        Set<String> matches = trie.findMatches(ParsedTopic.parse("sensor/room5/device10/metric3").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of("sensor/room5/device10/metric3").getLevels());
         long endTime = System.nanoTime();
 
         double durationMs = (endTime - startTime) / 1_000_000.0;
@@ -237,17 +238,17 @@ class TopicTrieTest {
 
         for (int i = 0; i < subscriptionCount; i++) {
             String topic = "sensor/room" + (i % 100) + "/device" + (i % 50) + "/metric" + (i % 20);
-            trie.addSubscription(ParsedTopic.parse(topic).getLevels(), "client" + i);
+            trie.addSubscription(Topic.of(topic).getLevels(), "client" + i);
         }
 
-        trie.addSubscription(ParsedTopic.parse("sensor/+/device10/+").getLevels(), "wildcardClient1");
-        trie.addSubscription(ParsedTopic.parse("sensor/room5/#").getLevels(), "wildcardClient2");
-        trie.addSubscription(ParsedTopic.parse("sensor/room5/device10/metric3").getLevels(), "exactClient");
+        trie.addSubscription(Topic.of("sensor/+/device10/+").getLevels(), "wildcardClient1");
+        trie.addSubscription(Topic.of("sensor/room5/#").getLevels(), "wildcardClient2");
+        trie.addSubscription(Topic.of("sensor/room5/device10/metric3").getLevels(), "exactClient");
 
         String publishTopic = "sensor/room5/device10/metric3";
 
         long startTime = System.nanoTime();
-        Set<String> trieMatches = trie.findMatches(ParsedTopic.parse(publishTopic).getLevels());
+        Set<String> trieMatches = trie.findMatches(Topic.of(publishTopic).getLevels());
         long trieTime = System.nanoTime() - startTime;
 
         System.out.printf("Trie Performance: Found %d matches in %.3f ms%n",
@@ -273,7 +274,7 @@ class TopicTrieTest {
             threads[t] = new Thread(() -> {
                 for (int i = 0; i < subscriptionsPerThread; i++) {
                     String topic = "topic" + threadId + "/" + i;
-                    trie.addSubscription(ParsedTopic.parse(topic).getLevels(), "client" + threadId + "_" + i);
+                    trie.addSubscription(Topic.of(topic).getLevels(), "client" + threadId + "_" + i);
                 }
             });
             threads[t].start();

@@ -27,7 +27,8 @@ public interface MqttSubscription extends Acknowledge {
 
     /**
      * 获取原始订阅消息
+     *
+     * @return 订阅消息
      */
     MqttSubscribeMessage getMessage();
-
 }

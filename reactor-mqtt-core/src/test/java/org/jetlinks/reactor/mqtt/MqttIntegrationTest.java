@@ -251,7 +251,7 @@ class MqttIntegrationTest {
                                         .connect()
                                         .flatMap(connection -> {
                                             connection.subscribe(Collections.singleton(topic), MqttQoS.AT_LEAST_ONCE, msg -> {
-                                                String content = msg.getPayload().toString(StandardCharsets.UTF_8);
+                                                String content = msg.message().payload().toString(StandardCharsets.UTF_8);
                                                 messageSink.tryEmitValue(content);
                                                 return Mono.empty();
                                             });

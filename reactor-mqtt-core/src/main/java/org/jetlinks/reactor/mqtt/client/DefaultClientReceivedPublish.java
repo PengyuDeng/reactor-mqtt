@@ -15,10 +15,9 @@
  */
 package org.jetlinks.reactor.mqtt.client;
 
-import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
-import org.jetlinks.reactor.mqtt.ParsedTopic;
+import org.jetlinks.reactor.mqtt.Topic;
 import reactor.core.publisher.Mono;
 
 import java.lang.invoke.MethodHandles;
@@ -35,20 +34,24 @@ class DefaultClientReceivedPublish implements ClientReceivedPublish {
 
     private final MqttPublishMessage message;
     private final DefaultClientConnection connection;
-    private volatile boolean acknowledged = false;
-    private volatile boolean released = false;
 
-    // 新增：缓存解析后的主题层级
-    private volatile String[] cachedTopicLevels;
+    @SuppressWarnings("unused")
+    private volatile boolean acknowledged = false;
+    @SuppressWarnings("unused")
+    private volatile boolean released = false;
+    @SuppressWarnings("unused")
+    private volatile Topic cachedTopic;
 
     private static final VarHandle ACKNOWLEDGED;
     private static final VarHandle RELEASED;
+    private static final VarHandle CACHED_TOPIC;
 
     static {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             ACKNOWLEDGED = lookup.findVarHandle(DefaultClientReceivedPublish.class, "acknowledged", boolean.class);
             RELEASED = lookup.findVarHandle(DefaultClientReceivedPublish.class, "released", boolean.class);
+            CACHED_TOPIC = lookup.findVarHandle(DefaultClientReceivedPublish.class, "cachedTopic", Topic.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -60,86 +63,76 @@ class DefaultClientReceivedPublish implements ClientReceivedPublish {
     }
 
     @Override
-    public String getTopic() {
-        return message.variableHeader().topicName();
-    }
-
-    @Override
-    public String[] getTopicLevels() {
-        // 使用局部变量减少 volatile 读取
-        String[] levels = cachedTopicLevels;
-        if (levels == null) {
-            // 双检锁 + 零分配路径
-            synchronized (this) {
-                levels = cachedTopicLevels;
-                if (levels == null) {
-                    // 使用 ParsedTopic 的字符串去重池
-                    levels = ParsedTopic.parse(getTopic()).getLevels();
-                    cachedTopicLevels = levels;
-                }
+    public Topic topic() {
+        Topic topic = (Topic) CACHED_TOPIC.getAcquire(this);
+        if (topic == null) {
+            topic = Topic.of(message.variableHeader().topicName());
+            if (!CACHED_TOPIC.compareAndSet(this, null, topic)) {
+                topic = (Topic) CACHED_TOPIC.getAcquire(this);
             }
         }
-        return levels;
+        return topic;
     }
 
     @Override
-    public ByteBuf getPayload() {
-        return message.payload();
-    }
-
-    @Override
-    public MqttQoS getQos() {
-        return message.fixedHeader().qosLevel();
-    }
-
-    @Override
-    public boolean isRetain() {
-        return message.fixedHeader().isRetain();
-    }
-
-    @Override
-    public boolean isDup() {
-        return message.fixedHeader().isDup();
-    }
-
-    @Override
-    public int getMessageId() {
-        return message.variableHeader().packetId();
-    }
-
-    @Override
-    public MqttProperties getProperties() {
-        return message.variableHeader().properties();
-    }
-
-    @Override
-    public MqttPublishMessage getOrigin() {
+    public MqttPublishMessage message() {
         return message;
     }
 
     @Override
-    public Mono<Void> acknowledge() {
-        return Mono.defer(() -> {
-            if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
-                return Mono.empty();
-            }
+    public MqttProperties properties() {
+        return message.variableHeader().properties();
+    }
 
-            MqttQoS qos = message.fixedHeader().qosLevel();
+    @Override
+    public Mono<Void> ack() {
 
-            if (qos == MqttQoS.AT_LEAST_ONCE) {
-                MqttMessage pubAck = MqttMessageBuilders.pubAck()
-                        .packetId(message.variableHeader().packetId())
-                        .build();
-                return connection.send(pubAck);
-            } else if (qos == MqttQoS.EXACTLY_ONCE) {
-                MqttMessage pubRec = new MqttMessage(
-                        PUBREC_HEADER,
-                        MqttMessageIdVariableHeader.from(message.variableHeader().packetId()));
-                return connection.send(pubRec);
-            }
-
+        if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
             return Mono.empty();
-        });
+        }
+
+        MqttQoS qos = message.fixedHeader().qosLevel();
+
+        if (qos == MqttQoS.AT_LEAST_ONCE) {
+            MqttMessage pubAck = MqttMessageBuilders.pubAck()
+                                                    .packetId(message.variableHeader().packetId())
+                                                    .build();
+            return connection.send(pubAck);
+        } else if (qos == MqttQoS.EXACTLY_ONCE) {
+            MqttMessage pubRec = new MqttMessage(
+                    PUBREC_HEADER,
+                    MqttMessageIdVariableHeader.from(message.variableHeader().packetId()));
+            return connection.send(pubRec);
+        }
+
+        return Mono.empty();
+
+    }
+
+    @Override
+    public Mono<Void> nack(MqttProperties properties) {
+
+        if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
+            return Mono.empty();
+        }
+
+        MqttQoS qos = message.fixedHeader().qosLevel();
+
+        if (qos == MqttQoS.AT_LEAST_ONCE) {
+            MqttMessage pubAck = MqttMessageBuilders.pubAck()
+                                                    .packetId(message.variableHeader().packetId())
+                                                    .reasonCode((byte) 0x80)
+                                                    .properties(properties)
+                                                    .build();
+            return connection.send(pubAck);
+        } else if (qos == MqttQoS.EXACTLY_ONCE) {
+            MqttPubReplyMessageVariableHeader variableHeader = new MqttPubReplyMessageVariableHeader(
+                    message.variableHeader().packetId(), (byte) 0x80, properties);
+            MqttMessage pubRec = new MqttMessage(PUBREC_HEADER, variableHeader);
+            return connection.send(pubRec);
+        }
+
+        return Mono.empty();
     }
 
     /**

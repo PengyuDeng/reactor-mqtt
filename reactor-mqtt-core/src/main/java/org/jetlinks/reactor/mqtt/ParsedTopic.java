@@ -27,35 +27,31 @@ import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.LEVEL_SEPARATOR;
  *
  * <h3>极致内存与性能优化</h3>
  * <ul>
- *   <li>Caffeine LRU 缓存，高性能无锁设计，自动淘汰最少使用的主题</li>
+ *   <li>Caffeine 软引用缓存，内存压力时自动回收，避免 OOM</li>
  *   <li>预计算哈希值，加速 Map 查找</li>
  *   <li>零拷贝数组访问（调用方承诺不修改）</li>
  *   <li><b>字符串去重池</b>：层级字符串自动去重，/org/1/device 和 /org/2/device 共享 "org" 和 "device"</li>
- *   <li><b>LRU 淘汰机制</b>：字符串池使用 Caffeine Cache，防止无限增长</li>
+ *   <li><b>软引用机制</b>：字符串池使用软引用，内存不足时自动释放</li>
  * </ul>
  *
  * @author PengyuDeng
  */
-public final class ParsedTopic {
-
-    private static final int DEFAULT_CACHE_SIZE = 1024;
-    private static final int DEFAULT_STRING_POOL_SIZE = 2048;
+public final class ParsedTopic implements Topic {
 
     /**
-     * Caffeine 高性能 LRU 缓存（无锁设计，优于 LinkedHashMap）
+     * Caffeine 软引用缓存，内存压力时自动回收
      */
     private static final Cache<String, ParsedTopic> CACHE = Caffeine.newBuilder()
-            .maximumSize(DEFAULT_CACHE_SIZE)
-            .build();
+                                                                    .softValues()
+                                                                    .build();
 
     /**
      * 字符串去重池 - 常见的层级字符串（如 "device", "sensor", "org"）会被共享
-     * 使用 Caffeine Cache 的 LRU 淘汰机制，防止极端场景下的内存泄漏
-     * （如数百万唯一设备 ID：/device/000001, /device/000002...）
+     * 使用软引用，内存压力时自动回收
      */
     private static final Cache<String, String> STRING_POOL = Caffeine.newBuilder()
-            .maximumSize(DEFAULT_STRING_POOL_SIZE)
-            .build();
+                                                                     .softValues()
+                                                                     .build();
 
     private final String original;
     private final String[] levels;
@@ -80,7 +76,7 @@ public final class ParsedTopic {
      * <p>优化目标：</p>
      * <ul>
      *   <li>/org/1/device 和 /org/2/device 共享 "org" 和 "device"</li>
-     *   <li>使用 Caffeine Cache 的 LRU 淘汰，防止内存无限增长</li>
+     *   <li>使用软引用，内存压力时自动回收</li>
      * </ul>
      */
     private static String internLevel(String level) {
@@ -96,25 +92,18 @@ public final class ParsedTopic {
      * @param topic 主题字符串
      * @return 解析后的主题对象
      */
-    public static ParsedTopic parse(String topic) {
+    static ParsedTopic parse(String topic) {
         return CACHE.get(topic, ParsedTopic::new);
     }
 
-    /**
-     * 获取主题层级数组（零拷贝，只读，请勿修改！）
-     *
-     * <p><b>警告</b>：此方法返回内部数组引用以提升性能，
-     * 调用方必须承诺不修改返回的数组。
-     * 如果需要修改，请自行拷贝：{@code Arrays.copyOf(levels, levels.length)}</p>
-     */
+
+    @Override
     public String[] getLevels() {
         return levels;
     }
 
-    /**
-     * 获取原始主题字符串
-     */
-    public String getOriginal() {
+    @Override
+    public String getValue() {
         return original;
     }
 
@@ -137,19 +126,5 @@ public final class ParsedTopic {
     @Override
     public String toString() {
         return original;
-    }
-
-    /**
-     * 获取缓存大小
-     */
-    public static long getCacheSize() {
-        return CACHE.estimatedSize();
-    }
-
-    /**
-     * 获取字符串池大小
-     */
-    public static long getStringPoolSize() {
-        return STRING_POOL.estimatedSize();
     }
 }

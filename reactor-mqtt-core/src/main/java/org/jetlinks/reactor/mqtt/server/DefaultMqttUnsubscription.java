@@ -1,6 +1,7 @@
 package org.jetlinks.reactor.mqtt.server;
 
 import io.netty.handler.codec.mqtt.MqttMessageBuilders;
+import io.netty.handler.codec.mqtt.MqttProperties;
 import io.netty.handler.codec.mqtt.MqttUnsubAckMessage;
 import io.netty.handler.codec.mqtt.MqttUnsubscribeMessage;
 import reactor.core.publisher.Mono;
@@ -42,16 +43,28 @@ public class DefaultMqttUnsubscription implements MqttUnsubscription {
     }
 
     @Override
-    public Mono<Void> acknowledge() {
-        return Mono.defer(() -> {
-            if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
-                return Mono.empty();
-            }
+    public Mono<Void> ack() {
 
-            MqttUnsubAckMessage unsubAck = MqttMessageBuilders.unsubAck()
-                                                              .packetId(message.variableHeader().messageId())
-                                                              .build();
-            return connection.send(unsubAck);
-        });
+        if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
+            return Mono.empty();
+        }
+
+        MqttUnsubAckMessage unsubAck = MqttMessageBuilders.unsubAck()
+                                                          .packetId(message.variableHeader().messageId())
+                                                          .build();
+        return connection.send(unsubAck);
+
+    }
+
+    @Override
+    public Mono<Void> nack(MqttProperties properties) {
+        if (!ACKNOWLEDGED.compareAndSet(this, false, true)) {
+            return Mono.empty();
+        }
+
+        MqttUnsubAckMessage unsubAck = MqttMessageBuilders.unsubAck()
+                                                          .packetId(message.variableHeader().messageId())
+                                                          .build();
+        return connection.send(unsubAck);
     }
 }

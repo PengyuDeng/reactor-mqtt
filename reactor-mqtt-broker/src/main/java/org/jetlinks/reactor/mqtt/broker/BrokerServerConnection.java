@@ -17,6 +17,7 @@ package org.jetlinks.reactor.mqtt.broker;
 
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import org.jetlinks.reactor.mqtt.server.DefaultServerConnection;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.NettyInbound;
 import reactor.netty.NettyOutbound;
@@ -47,30 +48,22 @@ class BrokerServerConnection extends DefaultServerConnection {
         // 设置消息处理器，拦截 PUBLISH、SUBSCRIBE、UNSUBSCRIBE 事件并通知 listener
         super.handlePublishing(publish -> {
             String clientId = getClientId();
-            // 使用 getOrigin() 获取原始 MqttPublishMessage
-            MqttPublishMessage message = publish.getOrigin();
-
-            // 通知 listener，由 router 处理消息路由
-            listener.onPublish(clientId, message).subscribe();
+            MqttPublishMessage message = publish.message();
+            return listener.onPublish(clientId, message);
         });
 
         super.handleSubscribe(subscription -> {
             String clientId = getClientId();
-
-            // 从 MqttSubscribeMessage 中提取所有订阅主题
-            subscription.getMessage().payload().topicSubscriptions().forEach(topicSub -> {
-                String topic = topicSub.topicFilter();
-                listener.onSubscribe(clientId, topic).subscribe();
-            });
+            return Flux.fromIterable(subscription.getMessage().payload().topicSubscriptions())
+                       .flatMap(topicSub -> listener.onSubscribe(clientId, topicSub.topicFilter()))
+                       .then();
         });
 
         super.handleUnsubscribe(unsubscription -> {
             String clientId = getClientId();
-
-            // 从 MqttUnsubscribeMessage 中提取所有取消订阅的主题
-            unsubscription.getMessage().payload().topics().forEach(topic -> {
-                listener.onUnsubscribe(clientId, topic).subscribe();
-            });
+            return Flux.fromIterable(unsubscription.getMessage().payload().topics())
+                       .flatMap(topic -> listener.onUnsubscribe(clientId, topic))
+                       .then();
         });
     }
 
@@ -78,7 +71,6 @@ class BrokerServerConnection extends DefaultServerConnection {
     public Mono<Void> accept() {
         return super.accept()
                     .then(Mono.defer(() -> {
-                        // 连接被接受后，通知 listener
                         String clientId = getClientId();
                         return listener.onConnectionAccepted(clientId, this);
                     }));

@@ -18,6 +18,10 @@ package org.jetlinks.reactor.mqtt;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -196,5 +200,84 @@ class TopicTrieArrayAPITest {
         Set<String> matches2 = trie.findMatches(parsed2.getLevels());
         assertEquals(1, matches2.size());
         assertTrue(matches2.contains("client2"));
+    }
+
+    @Test
+    void testConcurrentExactNodeCreation() throws InterruptedException {
+        int threadCount = 12;
+        int subscriptionsPerThread = 80;
+
+        runConcurrentAdds(threadCount, threadId -> {
+            for (int i = 0; i < subscriptionsPerThread; i++) {
+                trie.addSubscription(new String[]{"sensor", "room" + threadId, "metric" + i},
+                                     "client" + threadId + "_" + i);
+            }
+        });
+
+        assertEquals(threadCount * subscriptionsPerThread, trie.getTotalSubscriptionCount());
+    }
+
+    @Test
+    void testConcurrentPlusWildcardCreation() throws InterruptedException {
+        int threadCount = 16;
+
+        runConcurrentAdds(threadCount, threadId ->
+                trie.addSubscription(new String[]{"sensor", "+", "metric"},
+                                     "client" + threadId)
+        );
+
+        Set<String> matches = trie.findMatches(new String[]{"sensor", "room1", "metric"});
+        assertEquals(threadCount, matches.size());
+    }
+
+    @Test
+    void testConcurrentHashWildcardCreation() throws InterruptedException {
+        int threadCount = 16;
+
+        runConcurrentAdds(threadCount, threadId ->
+                trie.addSubscription(new String[]{"sensor", "#"},
+                                     "client" + threadId)
+        );
+
+        Set<String> matches = trie.findMatches(new String[]{"sensor", "room1", "metric"});
+        assertEquals(threadCount, matches.size());
+    }
+
+    private void runConcurrentAdds(int threadCount, ThrowingIntConsumer action) throws InterruptedException {
+        CountDownLatch ready = new CountDownLatch(threadCount);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(threadCount);
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        List<Thread> threads = new ArrayList<>(threadCount);
+
+        for (int threadId = 0; threadId < threadCount; threadId++) {
+            final int currentThreadId = threadId;
+            Thread thread = new Thread(() -> {
+                try {
+                    ready.countDown();
+                    start.await();
+                    action.accept(currentThreadId);
+                } catch (Throwable e) {
+                    error.compareAndSet(null, e);
+                } finally {
+                    done.countDown();
+                }
+            });
+            threads.add(thread);
+            thread.start();
+        }
+
+        ready.await();
+        start.countDown();
+        done.await();
+
+        if (error.get() != null) {
+            fail(error.get());
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingIntConsumer {
+        void accept(int value) throws Exception;
     }
 }

@@ -15,10 +15,12 @@
  */
 package org.jetlinks.reactor.mqtt;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.MULTI_WILDCARD;
@@ -60,6 +62,7 @@ public class TopicTrie<T> {
 
     private final TrieNode<T> root;
     private final Supplier<Collection<T>> collectionFactory;
+    private final ReentrantLock writeLock = new ReentrantLock();
 
     private static final ThreadLocal<MatchResultPool> RESULT_POOL = ThreadLocal.withInitial(MatchResultPool::new);
 
@@ -99,31 +102,40 @@ public class TopicTrie<T> {
             throw new IllegalArgumentException("Topic must not be empty");
         }
 
-        TrieNode<T> current = root;
+        writeLock.lock();
+        try {
+            TrieNode<T> current = root;
 
-        for (int i = 0; i < levels.length; i++) {
-            String level = levels[i];
+            for (int i = 0; i < levels.length; i++) {
+                String level = levels[i];
 
-            if (MULTI_WILDCARD.equals(level)) {
-                if (i != levels.length - 1) {
-                    throw new IllegalArgumentException("# wildcard must be the last level");
+                if (MULTI_WILDCARD.equals(level)) {
+                    if (i != levels.length - 1) {
+                        throw new IllegalArgumentException("# wildcard must be the last level");
+                    }
+                    TrieNode<T> hashWildcard = current.hashWildcard();
+                    if (hashWildcard == null) {
+                        hashWildcard = new TrieNode<>(collectionFactory);
+                        current.setHashWildcard(hashWildcard);
+                    }
+                    current = hashWildcard;
+                    break;
+                } else if (SINGLE_WILDCARD.equals(level)) {
+                    TrieNode<T> plusWildcard = current.plusWildcard();
+                    if (plusWildcard == null) {
+                        plusWildcard = new TrieNode<>(collectionFactory);
+                        current.setPlusWildcard(plusWildcard);
+                    }
+                    current = plusWildcard;
+                } else {
+                    current = current.getOrCreateChildren().computeIfAbsent(level, k -> new TrieNode<>(collectionFactory));
                 }
-                if (current.hashWildcard == null) {
-                    current.hashWildcard = new TrieNode<>(collectionFactory);
-                }
-                current = current.hashWildcard;
-                break;
-            } else if (SINGLE_WILDCARD.equals(level)) {
-                if (current.plusWildcard == null) {
-                    current.plusWildcard = new TrieNode<>(collectionFactory);
-                }
-                current = current.plusWildcard;
-            } else {
-                current = current.getChildren().computeIfAbsent(level, k -> new TrieNode<>(collectionFactory));
             }
-        }
 
-        current.subscriptions.add(subscription);
+            current.subscriptions.add(subscription);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -138,9 +150,14 @@ public class TopicTrie<T> {
             return false;
         }
 
-        boolean[] removed = new boolean[1];
-        removeSubscriptionRecursive(root, levels, 0, subscription, removed);
-        return removed[0];
+        writeLock.lock();
+        try {
+            boolean[] removed = new boolean[1];
+            removeSubscriptionRecursive(root, levels, 0, subscription, removed);
+            return removed[0];
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -158,27 +175,30 @@ public class TopicTrie<T> {
         String level = levels[depth];
 
         if (MULTI_WILDCARD.equals(level)) {
-            if (node.hashWildcard != null) {
-                if (node.hashWildcard.subscriptions.remove(subscription)) {
+            TrieNode<T> hashWildcard = node.hashWildcard();
+            if (hashWildcard != null) {
+                if (hashWildcard.subscriptions.remove(subscription)) {
                     removed[0] = true;
                 }
-                if (node.hashWildcard.isEmpty()) {
-                    node.hashWildcard = null;
+                if (hashWildcard.isEmpty()) {
+                    node.setHashWildcard(null);
                 }
             }
         } else if (SINGLE_WILDCARD.equals(level)) {
-            if (node.plusWildcard != null) {
-                boolean shouldDelete = removeSubscriptionRecursive(node.plusWildcard, levels, depth + 1, subscription, removed);
+            TrieNode<T> plusWildcard = node.plusWildcard();
+            if (plusWildcard != null) {
+                boolean shouldDelete = removeSubscriptionRecursive(plusWildcard, levels, depth + 1, subscription, removed);
                 if (shouldDelete) {
-                    node.plusWildcard = null;
+                    node.setPlusWildcard(null);
                 }
             }
         } else {
-            TrieNode<T> child = node.children != null ? node.children.get(level) : null;
+            Map<String, TrieNode<T>> children = node.children();
+            TrieNode<T> child = children != null ? children.get(level) : null;
             if (child != null) {
                 boolean shouldDelete = removeSubscriptionRecursive(child, levels, depth + 1, subscription, removed);
                 if (shouldDelete) {
-                    node.children.remove(level);
+                    children.remove(level);
                 }
             }
         }
@@ -223,25 +243,29 @@ public class TopicTrie<T> {
     private void findMatchesRecursive(TrieNode<T> node, String[] levels, int depth, Set<T> result) {
         if (depth == levels.length) {
             result.addAll(node.subscriptions);
-            if (node.hashWildcard != null) {
-                result.addAll(node.hashWildcard.subscriptions);
+            TrieNode<T> hashWildcard = node.hashWildcard();
+            if (hashWildcard != null) {
+                result.addAll(hashWildcard.subscriptions);
             }
             return;
         }
 
-        if (node.hashWildcard != null) {
-            result.addAll(node.hashWildcard.subscriptions);
+        TrieNode<T> hashWildcard = node.hashWildcard();
+        if (hashWildcard != null) {
+            result.addAll(hashWildcard.subscriptions);
         }
 
         String level = levels[depth];
 
-        TrieNode<T> exactNode = node.children != null ? node.children.get(level) : null;
+        Map<String, TrieNode<T>> children = node.children();
+        TrieNode<T> exactNode = children != null ? children.get(level) : null;
         if (exactNode != null) {
             findMatchesRecursive(exactNode, levels, depth + 1, result);
         }
 
-        if (node.plusWildcard != null) {
-            findMatchesRecursive(node.plusWildcard, levels, depth + 1, result);
+        TrieNode<T> plusWildcard = node.plusWildcard();
+        if (plusWildcard != null) {
+            findMatchesRecursive(plusWildcard, levels, depth + 1, result);
         }
     }
 
@@ -254,7 +278,12 @@ public class TopicTrie<T> {
         if (subscription == null) {
             return;
         }
-        removeAllRecursive(root, subscription);
+        writeLock.lock();
+        try {
+            removeAllRecursive(root, subscription);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -263,18 +292,21 @@ public class TopicTrie<T> {
     private void removeAllRecursive(TrieNode<T> node, T subscription) {
         node.subscriptions.remove(subscription);
 
-        if (node.children != null) {
-            for (TrieNode<T> child : node.children.values()) {
+        Map<String, TrieNode<T>> children = node.children();
+        if (children != null) {
+            for (TrieNode<T> child : children.values()) {
                 removeAllRecursive(child, subscription);
             }
         }
 
-        if (node.plusWildcard != null) {
-            removeAllRecursive(node.plusWildcard, subscription);
+        TrieNode<T> plusWildcard = node.plusWildcard();
+        if (plusWildcard != null) {
+            removeAllRecursive(plusWildcard, subscription);
         }
 
-        if (node.hashWildcard != null) {
-            removeAllRecursive(node.hashWildcard, subscription);
+        TrieNode<T> hashWildcard = node.hashWildcard();
+        if (hashWildcard != null) {
+            removeAllRecursive(hashWildcard, subscription);
         }
     }
 
@@ -293,12 +325,13 @@ public class TopicTrie<T> {
 
         for (String level : levels) {
             if (MULTI_WILDCARD.equals(level)) {
-                current = current.hashWildcard;
+                current = current.hashWildcard();
                 break;
             } else if (SINGLE_WILDCARD.equals(level)) {
-                current = current.plusWildcard;
+                current = current.plusWildcard();
             } else {
-                current = current.children != null ? current.children.get(level) : null;
+                Map<String, TrieNode<T>> children = current.children();
+                current = children != null ? children.get(level) : null;
             }
 
             if (current == null) {
@@ -321,18 +354,21 @@ public class TopicTrie<T> {
     private int countSubscriptionsRecursive(TrieNode<T> node) {
         int count = node.subscriptions.size();
 
-        if (node.children != null) {
-            for (TrieNode<T> child : node.children.values()) {
+        Map<String, TrieNode<T>> children = node.children();
+        if (children != null) {
+            for (TrieNode<T> child : children.values()) {
                 count += countSubscriptionsRecursive(child);
             }
         }
 
-        if (node.plusWildcard != null) {
-            count += countSubscriptionsRecursive(node.plusWildcard);
+        TrieNode<T> plusWildcard = node.plusWildcard();
+        if (plusWildcard != null) {
+            count += countSubscriptionsRecursive(plusWildcard);
         }
 
-        if (node.hashWildcard != null) {
-            count += countSubscriptionsRecursive(node.hashWildcard);
+        TrieNode<T> hashWildcard = node.hashWildcard();
+        if (hashWildcard != null) {
+            count += countSubscriptionsRecursive(hashWildcard);
         }
 
         return count;
@@ -342,12 +378,19 @@ public class TopicTrie<T> {
      * 清空所有订阅
      */
     public void clear() {
-        if (root.children != null) {
-            root.children.clear();
+        writeLock.lock();
+        try {
+            Map<String, TrieNode<T>> children = root.children();
+            if (children != null) {
+                children.clear();
+            }
+            root.setChildren(null);
+            root.setPlusWildcard(null);
+            root.setHashWildcard(null);
+            root.subscriptions.clear();
+        } finally {
+            writeLock.unlock();
         }
-        root.plusWildcard = null;
-        root.hashWildcard = null;
-        root.subscriptions.clear();
     }
 
     /**
@@ -361,32 +404,76 @@ public class TopicTrie<T> {
      * </ul>
      */
     private static class TrieNode<T> {
+        private static final VarHandle CHILDREN;
+        private static final VarHandle PLUS_WILDCARD;
+        private static final VarHandle HASH_WILDCARD;
+
+        static {
+            try {
+                MethodHandles.Lookup lookup = MethodHandles.lookup();
+                CHILDREN = lookup.findVarHandle(TrieNode.class, "children", Map.class);
+                PLUS_WILDCARD = lookup.findVarHandle(TrieNode.class, "plusWildcard", TrieNode.class);
+                HASH_WILDCARD = lookup.findVarHandle(TrieNode.class, "hashWildcard", TrieNode.class);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
         // 懒加载：只有在有子节点时才创建 Map
-        Map<String, TrieNode<T>> children;
-        TrieNode<T> plusWildcard;
-        TrieNode<T> hashWildcard;
+        @SuppressWarnings("unused")
+        private Map<String, TrieNode<T>> children;
+        @SuppressWarnings("unused")
+        private TrieNode<T> plusWildcard;
+        @SuppressWarnings("unused")
+        private TrieNode<T> hashWildcard;
         final Collection<T> subscriptions;
 
         TrieNode(Supplier<Collection<T>> collectionFactory) {
             this.subscriptions = collectionFactory.get();
-            this.children = null;
         }
 
-        /**
-         * 获取或创建子节点 Map
-         */
-        Map<String, TrieNode<T>> getChildren() {
+        @SuppressWarnings("unchecked")
+        Map<String, TrieNode<T>> children() {
+            return (Map<String, TrieNode<T>>) CHILDREN.getAcquire(this);
+        }
+
+        Map<String, TrieNode<T>> getOrCreateChildren() {
+            Map<String, TrieNode<T>> children = children();
             if (children == null) {
                 children = new ConcurrentHashMap<>();
+                setChildren(children);
             }
             return children;
         }
 
+        void setChildren(Map<String, TrieNode<T>> children) {
+            CHILDREN.setRelease(this, children);
+        }
+
+        @SuppressWarnings("unchecked")
+        TrieNode<T> plusWildcard() {
+            return (TrieNode<T>) PLUS_WILDCARD.getAcquire(this);
+        }
+
+        void setPlusWildcard(TrieNode<T> plusWildcard) {
+            PLUS_WILDCARD.setRelease(this, plusWildcard);
+        }
+
+        @SuppressWarnings("unchecked")
+        TrieNode<T> hashWildcard() {
+            return (TrieNode<T>) HASH_WILDCARD.getAcquire(this);
+        }
+
+        void setHashWildcard(TrieNode<T> hashWildcard) {
+            HASH_WILDCARD.setRelease(this, hashWildcard);
+        }
+
         boolean isEmpty() {
+            Map<String, TrieNode<T>> children = children();
             return subscriptions.isEmpty() &&
                     (children == null || children.isEmpty()) &&
-                    plusWildcard == null &&
-                    hashWildcard == null;
+                    plusWildcard() == null &&
+                    hashWildcard() == null;
         }
     }
 

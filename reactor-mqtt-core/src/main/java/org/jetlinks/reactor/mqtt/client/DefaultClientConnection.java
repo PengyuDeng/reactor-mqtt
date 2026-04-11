@@ -91,6 +91,9 @@ public class DefaultClientConnection implements ClientConnection {
     private static final VarHandle STATE;
     private static final VarHandle MESSAGE_ID_GENERATOR;
     private static final VarHandle CONNECTION;
+    private static final VarHandle CONN_ACK_SINK;
+    private static final VarHandle HEARTBEAT_TIMER;
+    private static final VarHandle RECONNECT_TASK;
 
     static {
         try {
@@ -98,6 +101,9 @@ public class DefaultClientConnection implements ClientConnection {
             STATE = lookup.findVarHandle(DefaultClientConnection.class, "state", int.class);
             MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultClientConnection.class, "messageIdGenerator", int.class);
             CONNECTION = lookup.findVarHandle(DefaultClientConnection.class, "connection", Connection.class);
+            CONN_ACK_SINK = lookup.findVarHandle(DefaultClientConnection.class, "connAckSink", Sinks.One.class);
+            HEARTBEAT_TIMER = lookup.findVarHandle(DefaultClientConnection.class, "heartbeatTimer", Disposable.class);
+            RECONNECT_TASK = lookup.findVarHandle(DefaultClientConnection.class, "reconnectTask", Disposable.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -113,9 +119,9 @@ public class DefaultClientConnection implements ClientConnection {
     private static final int ATTEMPT_INCREMENT = 0x8;
 
     /**
-     * 关闭完成信号,用于 onClose() 方法（延迟创建以节省内存）
+     * 关闭完成信号,用于 onClose() 方法
      */
-    private volatile Sinks.Empty<Void> closeSink;
+    private final Sinks.Empty<Void> closeSink = Sinks.empty();
 
     /**
      * CONNACK 消息接收器,每次重连时重置
@@ -151,6 +157,11 @@ public class DefaultClientConnection implements ClientConnection {
      */
     private volatile Disposable heartbeatTimer;
 
+    /**
+     * 重连任务句柄,用于在 close() 时取消后台重连
+     */
+    private volatile Disposable reconnectTask;
+
     public DefaultClientConnection(Connection connection,
                                    MqttClientConfig clientConfig,
                                    Supplier<TcpClient> tcpClientSupplier) {
@@ -172,7 +183,7 @@ public class DefaultClientConnection implements ClientConnection {
      */
     Mono<ClientConnection> initialize() {
         return Mono.defer(() -> {
-            connAckSink = Sinks.one();
+            setConnAckSink(Sinks.one());
             return ensureMqttCodec()
                     .then(Mono.fromRunnable(this::setupConnectionHandlers))
                     .then(sendConnect())
@@ -245,11 +256,11 @@ public class DefaultClientConnection implements ClientConnection {
         MqttConnectMessage connectMessage = builder.build();
 
         return send(connectMessage)
-                .then(connAckSink.asMono()
+                .then(currentConnAckSink().asMono()
                                  .timeout(config.getConnectTimeout())
                                  .flatMap(connAck -> {
-                                     if (connAck
-                                             .variableHeader()
+                                      if (connAck
+                                              .variableHeader()
                                              .connectReturnCode() == MqttConnectReturnCode.CONNECTION_ACCEPTED) {
                                          setConnectedFlag();
                                          resetReconnectAttempt();
@@ -282,7 +293,7 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     private Mono<Void> handleConnAck(MqttConnAckMessage msg) {
-        Sinks.EmitResult result = connAckSink.tryEmitValue(msg);
+        Sinks.EmitResult result = currentConnAckSink().tryEmitValue(msg);
         if (result.isFailure()) {
             log.log(Level.WARNING, () -> "Failed to emit CONNACK: " + result + ", this should not happen after reconnect fix");
         }
@@ -406,48 +417,72 @@ public class DefaultClientConnection implements ClientConnection {
     }
 
     private void attemptReconnect() {
+        if (hasFlag(CLOSED)) {
+            return;
+        }
+
         if (flagAlreadySet(RECONNECTING)) {
             return;
         }
 
         int attempt = incrementReconnectAttempt();
 
-        connAckSink = Sinks.one();
+        setConnAckSink(Sinks.one());
 
-        config.getReconnectStrategy()
-              .nextDelay(attempt, null)
-              .switchIfEmpty(Mono.defer(() -> {
-                  log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
-                  clearFlag(RECONNECTING);
-                  close().subscribe();
-                  return Mono.empty();
-              }))
-              .flatMap(delay -> Mono.delay(delay)
-                                    .then(tcpClientSupplier.get().connect())
-                                    .flatMap(conn -> {
-                                        CONNECTION.set(this, conn);
-                                        return ensureMqttCodec()
-                                                .then(Mono.fromRunnable(this::setupConnectionHandlers))
-                                                .then(sendConnect());
-                                    })
-                                    .then(resubscribeIfNeeded())
-              )
-              .subscribe(
-                      v -> clearFlag(RECONNECTING),
-                      error -> {
-                          clearFlag(RECONNECTING);
-                          log.log(Level.WARNING, () -> "Reconnect failed for client " + config.getClientId() + ": " + error.getMessage());
-                          attemptReconnect();
-                      },
-                      () -> {
-                          // 重连成功
-                          clearFlag(RECONNECTING);
-                          log.log(Level.INFO, () -> "Reconnect successful for client " + config.getClientId());
-                          if (reconnectSink.currentSubscriberCount() > 0) {
-                              reconnectSink.tryEmitNext(attempt);
-                          }
-                      }
-              );
+        Disposable reconnect = config.getReconnectStrategy()
+                                     .nextDelay(attempt, null)
+                                     .switchIfEmpty(Mono.defer(() -> {
+                                         log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
+                                         clearFlag(RECONNECTING);
+                                         close().subscribe();
+                                         return Mono.empty();
+                                     }))
+                                     .flatMap(delay -> Mono.delay(delay)
+                                                           .then(Mono.defer(() -> {
+                                                               if (hasFlag(CLOSED)) {
+                                                                   return Mono.empty();
+                                                               }
+                                                               return tcpClientSupplier.get()
+                                                                                       .connect()
+                                                                                       .flatMap(conn -> {
+                                                                                           CONNECTION.set(this, conn);
+                                                                                           return ensureMqttCodec()
+                                                                                                   .then(Mono.fromRunnable(this::setupConnectionHandlers))
+                                                                                                   .then(sendConnect())
+                                                                                                   .then(resubscribeIfNeeded());
+                                                                                       });
+                                                           }))
+                                     )
+                                     .subscribe(
+                                             v -> {
+                                             },
+                                             error -> {
+                                                 clearReconnectTask();
+                                                 clearFlag(RECONNECTING);
+                                                 if (hasFlag(CLOSED)) {
+                                                     return;
+                                                 }
+                                                 log.log(Level.WARNING, () -> "Reconnect failed for client " + config.getClientId() + ": " + error.getMessage());
+                                                 attemptReconnect();
+                                             },
+                                             () -> {
+                                                 clearReconnectTask();
+                                                 clearFlag(RECONNECTING);
+                                                 if (hasFlag(CLOSED)) {
+                                                     return;
+                                                 }
+                                                 log.log(Level.INFO, () -> "Reconnect successful for client " + config.getClientId());
+                                                 if (reconnectSink.currentSubscriberCount() > 0) {
+                                                     reconnectSink.tryEmitNext(attempt);
+                                                 }
+                                             }
+                                     );
+
+        RECONNECT_TASK.setRelease(this, reconnect);
+
+        if (hasFlag(CLOSED)) {
+            cancelReconnect();
+        }
     }
 
     private Mono<Void> resubscribeIfNeeded() {
@@ -620,14 +655,6 @@ public class DefaultClientConnection implements ClientConnection {
 
     @Override
     public Mono<Void> onClose() {
-        // 延迟创建 closeSink
-        if (closeSink == null) {
-            synchronized (this) {
-                if (closeSink == null) {
-                    closeSink = Sinks.empty();
-                }
-            }
-        }
         return closeSink.asMono();
     }
 
@@ -637,16 +664,16 @@ public class DefaultClientConnection implements ClientConnection {
             if (flagAlreadySet(CLOSED)) {
                 return Mono.empty();
             }
+            cancelReconnect();
             stopHeartbeat();
             clearFlag(CONNECTED);
+            clearFlag(RECONNECTING);
 
             Connection conn = (Connection) CONNECTION.get(this);
             if (conn != null) {
                 conn.dispose();
             }
-            if (closeSink != null) {
-                closeSink.tryEmitEmpty();
-            }
+            closeSink.tryEmitEmpty();
             reconnectSink.tryEmitComplete();
             return Mono.empty();
         });
@@ -733,21 +760,21 @@ public class DefaultClientConnection implements ClientConnection {
         long finalIntervalSeconds = intervalSeconds;
         log.log(Level.FINE, () -> "Starting heartbeat for client " + config.getClientId() + " with interval " + finalIntervalSeconds + "s");
 
-        heartbeatTimer = Flux.interval(Duration.ofSeconds(intervalSeconds), Schedulers.parallel())
-                             .flatMap(tick -> sendPing())
-                             .subscribe(null,
-                                        error -> log.log(Level.WARNING, error, () -> "Heartbeat error for client " + config.getClientId())
-                             );
+        Disposable timer = Flux.interval(Duration.ofSeconds(intervalSeconds), Schedulers.parallel())
+                               .flatMap(tick -> sendPing())
+                               .subscribe(null,
+                                          error -> log.log(Level.WARNING, error, () -> "Heartbeat error for client " + config.getClientId())
+                               );
+        HEARTBEAT_TIMER.setRelease(this, timer);
     }
 
     /**
      * 停止心跳定时器
      */
     private void stopHeartbeat() {
-        Disposable timer = heartbeatTimer;
+        Disposable timer = (Disposable) HEARTBEAT_TIMER.getAndSet(this, null);
         if (timer != null && !timer.isDisposed()) {
             timer.dispose();
-            heartbeatTimer = null;
             log.log(Level.FINE, () -> "Stopped heartbeat for client " + config.getClientId());
         }
     }
@@ -817,6 +844,26 @@ public class DefaultClientConnection implements ClientConnection {
             prev = (int) STATE.getVolatile(this);
             next = prev & FLAGS_MASK;
         } while (!STATE.compareAndSet(this, prev, next));
+    }
+
+    private void cancelReconnect() {
+        Disposable reconnect = (Disposable) RECONNECT_TASK.getAndSet(this, null);
+        if (reconnect != null && !reconnect.isDisposed()) {
+            reconnect.dispose();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Sinks.One<MqttConnAckMessage> currentConnAckSink() {
+        return (Sinks.One<MqttConnAckMessage>) CONN_ACK_SINK.getAcquire(this);
+    }
+
+    private void setConnAckSink(Sinks.One<MqttConnAckMessage> sink) {
+        CONN_ACK_SINK.setRelease(this, sink);
+    }
+
+    private void clearReconnectTask() {
+        RECONNECT_TASK.setRelease(this, null);
     }
 
     public static class MqttConnectionException extends RuntimeException {

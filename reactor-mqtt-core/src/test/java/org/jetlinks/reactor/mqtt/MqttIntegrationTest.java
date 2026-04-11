@@ -33,7 +33,6 @@ import reactor.test.StepVerifier;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -116,10 +115,28 @@ class MqttIntegrationTest {
     @Test
     @Timeout(15)
     void testMultipleMessages() {
-        // 测试多条消息的发布订阅 - 使用响应式方式
         int messageCount = 10;
-        AtomicInteger receivedCount = new AtomicInteger(0);
-        Sinks.One<Integer> completionSink = Sinks.one();
+        CountDownLatch messageLatch = new CountDownLatch(messageCount);
+        AtomicInteger serverReceivedCount = new AtomicInteger(0);
+        AtomicReference<String> lastPayload = new AtomicReference<>();
+
+        if (server != null) {
+            server.disposeNow();
+        }
+
+        server = MqttServer.create()
+                           .host("127.0.0.1")
+                           .port(TEST_PORT)
+                           .handle(connection -> {
+                               connection.handlePublishing(msg -> {
+                                   serverReceivedCount.incrementAndGet();
+                                   lastPayload.set(msg.message().payload().toString(StandardCharsets.UTF_8));
+                                   messageLatch.countDown();
+                                   return Mono.empty();
+                               });
+                               return connection.accept();
+                           })
+                           .bindNow();
 
         client = MqttClient.create()
                            .host("127.0.0.1")
@@ -127,16 +144,6 @@ class MqttIntegrationTest {
                            .clientId("multi-msg-test")
                            .connectNow();
 
-        // 订阅
-        client.subscribe("test/multi", msg -> {
-            int count = receivedCount.incrementAndGet();
-            if (count == messageCount) {
-                completionSink.tryEmitValue(count);
-            }
-            return Mono.empty();
-        });
-
-        // 发布多条消息并等待接收
         StepVerifier.create(
                             Flux.range(0, messageCount)
                                 .flatMap(i -> {
@@ -145,21 +152,38 @@ class MqttIntegrationTest {
                                                           Unpooled.wrappedBuffer(message.getBytes(StandardCharsets.UTF_8)),
                                                           MqttQoS.AT_MOST_ONCE);
                                 })
-                                .then(Mono.delay(Duration.ofMillis(100)))
-                                .then(completionSink.asMono())
                     )
-                    .expectNext(messageCount)
                     .verifyComplete();
 
-        assertEquals(messageCount, receivedCount.get());
+        assertTrue(await(messageLatch));
+        assertEquals(messageCount, serverReceivedCount.get());
+        assertEquals("Message 9", lastPayload.get());
     }
 
     @Test
     @Timeout(15)
     void testUnsubscribe() throws InterruptedException {
-        // 测试取消订阅
         CountDownLatch messageLatch = new CountDownLatch(1);
+        CountDownLatch unsubscribeLatch = new CountDownLatch(1);
         AtomicInteger messageCount = new AtomicInteger(0);
+        AtomicReference<ServerConnection> serverConnection = new AtomicReference<>();
+
+        if (server != null) {
+            server.disposeNow();
+        }
+
+        server = MqttServer.create()
+                           .host("127.0.0.1")
+                           .port(TEST_PORT)
+                           .handle(connection -> {
+                               serverConnection.set(connection);
+                               connection.handleUnsubscribe(unsub -> {
+                                   unsubscribeLatch.countDown();
+                                   return Mono.empty();
+                               });
+                               return connection.accept();
+                           })
+                           .bindNow();
 
         client = MqttClient.create()
                            .host("127.0.0.1")
@@ -174,39 +198,40 @@ class MqttIntegrationTest {
             return Mono.empty();
         });
 
-        Thread.sleep(500);
-
-        // 发送第一条消息
-        client.publish("test/unsub",
-                       Unpooled.wrappedBuffer("Message 1".getBytes(StandardCharsets.UTF_8)),
-                       MqttQoS.AT_MOST_ONCE)
-              .block();
+        publishFromServer(serverConnection.get(), "test/unsub", "Message 1", MqttQoS.AT_MOST_ONCE);
 
         assertTrue(messageLatch.await(5, TimeUnit.SECONDS));
         assertEquals(1, messageCount.get());
 
-        // 取消订阅
         subscription.dispose();
-        Thread.sleep(500);
+        assertTrue(unsubscribeLatch.await(5, TimeUnit.SECONDS));
 
-        // 发送第二条消息（不应该收到）
-        client.publish("test/unsub",
-                       Unpooled.wrappedBuffer("Message 2".getBytes(StandardCharsets.UTF_8)),
-                       MqttQoS.AT_MOST_ONCE)
-              .block();
+        publishFromServer(serverConnection.get(), "test/unsub", "Message 2", MqttQoS.AT_MOST_ONCE);
 
-        Thread.sleep(1000);
+        Thread.sleep(300);
 
-        // 仍然只收到一条消息
         assertEquals(1, messageCount.get());
     }
 
     @Test
     @Timeout(15)
     void testWildcardSubscription() throws InterruptedException {
-        // 测试通配符订阅
         CountDownLatch messageLatch = new CountDownLatch(2);
         AtomicInteger receivedCount = new AtomicInteger(0);
+        AtomicReference<ServerConnection> serverConnection = new AtomicReference<>();
+
+        if (server != null) {
+            server.disposeNow();
+        }
+
+        server = MqttServer.create()
+                           .host("127.0.0.1")
+                           .port(TEST_PORT)
+                           .handle(connection -> {
+                               serverConnection.set(connection);
+                               return connection.accept();
+                           })
+                           .bindNow();
 
         client = MqttClient.create()
                            .host("127.0.0.1")
@@ -221,16 +246,9 @@ class MqttIntegrationTest {
             return Mono.empty();
         });
 
-        Thread.sleep(500);
-
-        // 发布到不同的子主题
-        client.publish("sensor/room1/temperature",
-                       Unpooled.wrappedBuffer("20".getBytes(StandardCharsets.UTF_8)))
-              .block();
-
-        client.publish("sensor/room2/temperature",
-                       Unpooled.wrappedBuffer("22".getBytes(StandardCharsets.UTF_8)))
-              .block();
+        publishFromServer(serverConnection.get(), "sensor/room1/temperature", "20", MqttQoS.AT_MOST_ONCE);
+        publishFromServer(serverConnection.get(), "sensor/room2/temperature", "22", MqttQoS.AT_MOST_ONCE);
+        publishFromServer(serverConnection.get(), "sensor/room2/humidity", "60", MqttQoS.AT_MOST_ONCE);
 
         assertTrue(messageLatch.await(5, TimeUnit.SECONDS));
         assertEquals(2, receivedCount.get());
@@ -240,9 +258,25 @@ class MqttIntegrationTest {
     @Test
     @Timeout(15)
     void testPublishSubscribeFinal() {
-        String topic = "test/topic";
+        String topic = "test/qos1";
         String payloadStr = "Hello MQTT";
-        Sinks.One<String> messageSink = Sinks.one();
+        Sinks.One<String> payloadSink = Sinks.one();
+
+        if (server != null) {
+            server.disposeNow();
+        }
+
+        server = MqttServer.create()
+                           .host("127.0.0.1")
+                           .port(TEST_PORT)
+                           .handle(connection -> {
+                               connection.handlePublishing(msg -> {
+                                   payloadSink.tryEmitValue(msg.message().payload().toString(StandardCharsets.UTF_8));
+                                   return Mono.empty();
+                               });
+                               return connection.accept();
+                           })
+                           .bindNow();
 
         Mono<Void> testFlow = MqttClient.create()
                                         .host("127.0.0.1")
@@ -250,27 +284,14 @@ class MqttIntegrationTest {
                                         .clientId("pub-sub-test")
                                         .connect()
                                         .flatMap(connection -> {
-                                            connection.subscribe(Collections.singleton(topic), MqttQoS.AT_LEAST_ONCE, msg -> {
-                                                String content = msg.message().payload().toString(StandardCharsets.UTF_8);
-                                                messageSink.tryEmitValue(content);
-                                                return Mono.empty();
-                                            });
-
-                                            Mono<Void> publishAndForget = Mono.delay(Duration.ofMillis(500))
-                                                                              .then(connection.publish(topic,
-                                                                                                       Unpooled.wrappedBuffer(payloadStr.getBytes(StandardCharsets.UTF_8)),
-                                                                                                       MqttQoS.AT_LEAST_ONCE, false))
-                                                                              .onErrorResume(e -> {
-                                                                                  messageSink.tryEmitError(e);
-                                                                                  return Mono.empty();
-                                                                              });
-
-                                            return messageSink.asMono()
-                                                              .doOnSubscribe(s -> publishAndForget.subscribe())
-                                                              .delayElement(Duration.ofMillis(200)) // <--- 给 PUBACK 留出发送时间
+                                            return connection.publish(topic,
+                                                                      Unpooled.wrappedBuffer(payloadStr.getBytes(StandardCharsets.UTF_8)),
+                                                                      MqttQoS.AT_LEAST_ONCE,
+                                                                      false)
+                                                              .then(payloadSink.asMono())
+                                                              .doOnNext(content -> assertEquals(payloadStr, content))
                                                               .then()
                                                               .doFinally(sig -> {
-                                                                  System.out.println(">>> 正在清理连接... 信号: " + sig);
                                                                   connection.close().subscribe();
                                                               });
                                         });
@@ -287,16 +308,36 @@ class MqttIntegrationTest {
                                              .host("127.0.0.1")
                                              .port(TEST_PORT)
                                              .clientId("lifecycle-test")
-                                             .connect()
-                                             .flatMap(connection -> {
-                                                 assertTrue(connection.isAlive(), "连接应该是存活状态");
-                                                 return connection.disconnect()
+                                            .connect()
+                                            .flatMap(connection -> {
+                                                assertTrue(connection.isAlive(), "连接应该是存活状态");
+                                                return connection.disconnect()
                                                                   .then(connection.onClose())
                                                                   .doOnSuccess(v -> assertFalse(connection.isAlive(), "断开后连接不应存活"));
-                                             });
+                                            });
 
         StepVerifier.create(lifecycleTest)
                     .expectComplete()
                     .verify(Duration.ofSeconds(10));
+    }
+
+    private boolean await(CountDownLatch latch) {
+        try {
+            return latch.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            fail(e);
+            return false;
+        }
+    }
+
+    private void publishFromServer(ServerConnection connection, String topic, String payload, MqttQoS qos) {
+        assertInstanceOf(org.jetlinks.reactor.mqtt.server.DefaultServerConnection.class, connection);
+        ((org.jetlinks.reactor.mqtt.server.DefaultServerConnection) connection)
+                .publish(topic,
+                         Unpooled.wrappedBuffer(payload.getBytes(StandardCharsets.UTF_8)),
+                         qos,
+                         false)
+                .block(Duration.ofSeconds(5));
     }
 }

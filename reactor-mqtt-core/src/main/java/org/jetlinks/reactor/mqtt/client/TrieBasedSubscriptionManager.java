@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -73,8 +74,17 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
         // 添加处理器并返回 Disposable
         return handlers.addHandler(handler, () -> {
             // 当最后一个处理器被移除时，从 Trie 和 Map 中删除
-            subscriptionsMap.remove(topicStr);
-            trie.removeSubscription(levels, handlers);
+            AtomicBoolean removed = new AtomicBoolean(false);
+            subscriptionsMap.compute(topicStr, (key, current) -> {
+                if (current == handlers) {
+                    removed.set(true);
+                    return null;
+                }
+                return current;
+            });
+            if (removed.get()) {
+                trie.removeSubscription(levels, handlers);
+            }
         });
     }
 

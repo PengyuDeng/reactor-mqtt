@@ -162,7 +162,7 @@ class DefaultSubscriptionManager implements SubscriptionManager {
                 // 如果没有处理器了，取消订阅并移除容器
                 if (handlers.isEmpty()) {
                     dispose();
-                    subscriptions.remove(topic);
+                    subscriptions.compute(topic, (key, current) -> current == this ? null : current);
                 }
             };
         }

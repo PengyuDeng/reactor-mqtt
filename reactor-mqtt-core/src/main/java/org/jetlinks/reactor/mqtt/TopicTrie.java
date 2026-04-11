@@ -434,7 +434,7 @@ public class TopicTrie<T> {
 
         @SuppressWarnings("unchecked")
         Map<String, TrieNode<T>> children() {
-            return (Map<String, TrieNode<T>>) CHILDREN.getAcquire(this);
+            return (Map<String, TrieNode<T>>) CHILDREN.getVolatile(this);
         }
 
         Map<String, TrieNode<T>> getOrCreateChildren() {
@@ -447,25 +447,25 @@ public class TopicTrie<T> {
         }
 
         void setChildren(Map<String, TrieNode<T>> children) {
-            CHILDREN.setRelease(this, children);
+            CHILDREN.setVolatile(this, children);
         }
 
         @SuppressWarnings("unchecked")
         TrieNode<T> plusWildcard() {
-            return (TrieNode<T>) PLUS_WILDCARD.getAcquire(this);
+            return (TrieNode<T>) PLUS_WILDCARD.getVolatile(this);
         }
 
         void setPlusWildcard(TrieNode<T> plusWildcard) {
-            PLUS_WILDCARD.setRelease(this, plusWildcard);
+            PLUS_WILDCARD.setVolatile(this, plusWildcard);
         }
 
         @SuppressWarnings("unchecked")
         TrieNode<T> hashWildcard() {
-            return (TrieNode<T>) HASH_WILDCARD.getAcquire(this);
+            return (TrieNode<T>) HASH_WILDCARD.getVolatile(this);
         }
 
         void setHashWildcard(TrieNode<T> hashWildcard) {
-            HASH_WILDCARD.setRelease(this, hashWildcard);
+            HASH_WILDCARD.setVolatile(this, hashWildcard);
         }
 
         boolean isEmpty() {

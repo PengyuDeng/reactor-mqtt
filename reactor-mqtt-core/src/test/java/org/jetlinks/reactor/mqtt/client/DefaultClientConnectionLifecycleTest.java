@@ -60,6 +60,36 @@ class DefaultClientConnectionLifecycleTest {
                     .verifyComplete();
     }
 
+    @Test
+    void shouldNotKeepNewReconnectTaskWhenPreviousAttemptFailsSynchronously() throws Exception {
+        AtomicInteger strategyCalls = new AtomicInteger();
+        AtomicInteger supplierCalls = new AtomicInteger();
+        ReconnectStrategy reconnectStrategy = (attempt, lastError) -> {
+            if (strategyCalls.getAndIncrement() == 0) {
+                return Mono.error(new IllegalStateException("sync reconnect failure"));
+            }
+            return Mono.just(Duration.ofMillis(200));
+        };
+        Supplier<TcpClient> tcpClientSupplier = () -> {
+            supplierCalls.incrementAndGet();
+            return TcpClient.create().host("127.0.0.1").port(1);
+        };
+
+        DefaultClientConnection connection = newConnection(reconnectStrategy, tcpClientSupplier);
+
+        Method attemptReconnect = DefaultClientConnection.class.getDeclaredMethod("attemptReconnect");
+        attemptReconnect.setAccessible(true);
+        attemptReconnect.invoke(connection);
+
+        connection.close().block(Duration.ofSeconds(1));
+        Thread.sleep(350);
+
+        assertEquals(0, supplierCalls.get());
+        assertEquals(2, strategyCalls.get());
+        StepVerifier.create(connection.onClose())
+                    .verifyComplete();
+    }
+
     private DefaultClientConnection newConnection(ReconnectStrategy reconnectStrategy,
                                                   Supplier<TcpClient> tcpClientSupplier) {
         MqttClientConfig config = new MqttClientConfig();

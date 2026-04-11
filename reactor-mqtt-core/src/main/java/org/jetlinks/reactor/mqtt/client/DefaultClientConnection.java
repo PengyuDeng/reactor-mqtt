@@ -478,7 +478,11 @@ public class DefaultClientConnection implements ClientConnection {
                                              }
                                      );
 
-        RECONNECT_TASK.setRelease(this, reconnect);
+        if (!RECONNECT_TASK.compareAndSet(this, null, reconnect)) {
+            if (!reconnect.isDisposed()) {
+                reconnect.dispose();
+            }
+        }
 
         if (hasFlag(CLOSED)) {
             cancelReconnect();

@@ -18,7 +18,6 @@ package org.jetlinks.reactor.mqtt.client;
 import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.TopicMatcher;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.lang.invoke.MethodHandles;
@@ -65,10 +64,12 @@ class DefaultSubscriptionManager implements SubscriptionManager {
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
         String topic = publishing.topic().getValue();
 
-        return Flux.fromIterable(subscriptions.entrySet())
-                   .filter(entry -> TopicMatcher.matches(entry.getKey(), topic))
-                   .flatMap(entry -> entry.getValue().handle(publishing))
-                   .then();
+        return ReactiveTaskSupport.whenAll(
+                subscriptions.entrySet(),
+                entry -> TopicMatcher.matches(entry.getKey(), topic)
+                        ? entry.getValue().handle(publishing)
+                        : null
+        );
     }
 
     @Override
@@ -147,11 +148,11 @@ class DefaultSubscriptionManager implements SubscriptionManager {
             if (SUBSCRIBED.compareAndSet(this, false, true)) {
                 // 首次订阅，发送 SUBSCRIBE 消息到服务器
                 if (connection instanceof DefaultClientConnection c) {
-                    c.doSubscribe(topic, qos)
-                     .subscribe(
-                             v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
-                             error -> log.log(Level.WARNING, error, () -> "Failed to subscribe to topic: " + topic)
-                     );
+                    c.runManagedTask(
+                            c.doSubscribe(topic, qos),
+                            () -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
+                            error -> log.log(Level.WARNING, error, () -> "Failed to subscribe to topic: " + topic)
+                    );
                 }
             }
 
@@ -169,23 +170,15 @@ class DefaultSubscriptionManager implements SubscriptionManager {
 
         @Override
         public Mono<Void> handle(ClientReceivedPublish publishing) {
-            return Flux.fromIterable(handlers)
-                       .flatMap(h -> h.apply(publishing)
-                                      .onErrorResume(error -> {
-                                          log.log(Level.WARNING, error,
-                                                  () -> String.format("Handler error for topic [%s]: %s",
-                                                                      topic, error.getMessage()));
-                                          return Mono.empty();
-                                      }))
-                       .then();
+            return HandlerDispatchSupport.dispatch(handlers, publishing, topic, log);
         }
 
         @Override
         public void dispose() {
-            if ((boolean) SUBSCRIBED.get(this) && connection.isAlive()) {
-                connection.unsubscribe(topic).subscribe(
-                        v -> {
-                        },
+            if ((boolean) SUBSCRIBED.get(this) && connection.isAlive() && connection instanceof DefaultClientConnection c) {
+                c.runManagedTask(
+                        connection.unsubscribe(topic),
+                        null,
                         error -> {
                             // 只记录非超时错误，连接关闭时的超时是正常的
                             if (!(error instanceof java.util.concurrent.TimeoutException)) {

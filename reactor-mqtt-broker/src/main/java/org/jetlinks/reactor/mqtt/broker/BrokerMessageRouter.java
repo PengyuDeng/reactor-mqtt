@@ -22,7 +22,6 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import org.jetlinks.reactor.mqtt.server.ServerConnection;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
@@ -69,8 +68,7 @@ class BrokerMessageRouter implements ServerConnectionListener {
 
     @Override
     public Mono<Void> onConnectionAccepted(String clientId, ServerConnection connection) {
-        registerConnection(clientId, connection);
-        return Mono.empty();
+        return registerConnection(clientId, connection);
     }
 
     @Override
@@ -105,18 +103,24 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param clientId   客户端ID
      * @param connection 连接实例
      */
-    private void registerConnection(String clientId, ServerConnection connection) {
-        if (clientId == null || connection == null) {
-            throw new IllegalArgumentException("clientId and connection must not be null");
-        }
+    private Mono<Void> registerConnection(String clientId, ServerConnection connection) {
+        return Mono.defer(() -> {
+            if (clientId == null || connection == null) {
+                throw new IllegalArgumentException("clientId and connection must not be null");
+            }
 
-        ServerConnection old = connections.put(clientId, connection);
-        if (old != null && old != connection) {
-            log.log(Level.INFO, () -> "Client " + clientId + " reconnected, closing old connection");
-            old.close().subscribe();
-        }
+            ServerConnection old = connections.put(clientId, connection);
+            log.log(Level.FINE, () -> "Registered connection for client: " + clientId);
+            return closeReplacedConnection(clientId, old, connection);
+        });
+    }
 
-        log.log(Level.FINE, () -> "Registered connection for client: " + clientId);
+    private Mono<Void> closeReplacedConnection(String clientId, ServerConnection old, ServerConnection connection) {
+        if (old == null || old == connection) {
+            return Mono.empty();
+        }
+        log.log(Level.INFO, () -> "Client " + clientId + " reconnected, closing old connection");
+        return old.close();
     }
 
     /**
@@ -175,30 +179,10 @@ class BrokerMessageRouter implements ServerConnectionListener {
 
         log.log(Level.FINE, () -> "Publishing to topic " + topic + " for " + matchedClients.size() + " clients");
 
-        return Flux.fromIterable(matchedClients)
-                   .flatMap(clientId -> {
-                       ServerConnection connection = connections.get(clientId);
-                       if (connection == null) {
-                           log.log(Level.WARNING, () -> "Client " + clientId + " not found in connections");
-                           return Mono.empty();
-                       }
-
-                       return Mono.using(payload::retainedDuplicate,
-                                         clientPayload -> {
-                                             int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : 1;
-                                             MqttPublishMessage publishMessage = MqttMessageBuilders.publish()
-                                                                                                    .topicName(topic)
-                                                                                                    .payload(clientPayload)
-                                                                                                    .qos(qos)
-                                                                                                    .retained(retain)
-                                                                                                    .messageId(messageId)
-                                                                                                    .build();
-                                             return connection.publish(publishMessage);
-                                         },
-                                         ByteBuf::release
-                       ).subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
-                   })
-                   .then();
+        return ReactiveTaskSupport.whenAll(
+                matchedClients,
+                clientId -> publishToClient(clientId, topic, payload, qos, retain)
+        );
     }
 
     /**
@@ -215,6 +199,35 @@ class BrokerMessageRouter implements ServerConnectionListener {
         boolean retain = message.fixedHeader().isRetain();
 
         return publish(publisherClientId, topic, payload, qos, retain);
+    }
+
+    private Mono<Void> publishToClient(String clientId,
+                                       String topic,
+                                       ByteBuf payload,
+                                       MqttQoS qos,
+                                       boolean retain) {
+        ServerConnection connection = connections.get(clientId);
+        if (connection == null) {
+            log.log(Level.WARNING, () -> "Client " + clientId + " not found in connections");
+            return Mono.empty();
+        }
+
+        return Mono.using(
+                payload::retainedDuplicate,
+                clientPayload -> connection.publish(newPublishMessage(topic, clientPayload, qos, retain)),
+                ByteBuf::release
+        );
+    }
+
+    private MqttPublishMessage newPublishMessage(String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
+        int messageId = qos == MqttQoS.AT_MOST_ONCE ? 0 : 1;
+        return MqttMessageBuilders.publish()
+                                  .topicName(topic)
+                                  .payload(payload)
+                                  .qos(qos)
+                                  .retained(retain)
+                                  .messageId(messageId)
+                                  .build();
     }
 
     /**

@@ -17,7 +17,6 @@ package org.jetlinks.reactor.mqtt.broker;
 
 import io.netty.handler.codec.mqtt.MqttPublishMessage;
 import org.jetlinks.reactor.mqtt.server.DefaultServerConnection;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.NettyInbound;
 import reactor.netty.NettyOutbound;
@@ -54,16 +53,18 @@ class BrokerServerConnection extends DefaultServerConnection {
 
         super.handleSubscribe(subscription -> {
             String clientId = getClientId();
-            return Flux.fromIterable(subscription.getMessage().payload().topicSubscriptions())
-                       .flatMap(topicSub -> listener.onSubscribe(clientId, topicSub.topicFilter()))
-                       .then();
+            return ReactiveTaskSupport.whenAll(
+                    subscription.getMessage().payload().topicSubscriptions(),
+                    topicSub -> listener.onSubscribe(clientId, topicSub.topicFilter())
+            );
         });
 
         super.handleUnsubscribe(unsubscription -> {
             String clientId = getClientId();
-            return Flux.fromIterable(unsubscription.getMessage().payload().topics())
-                       .flatMap(topic -> listener.onUnsubscribe(clientId, topic))
-                       .then();
+            return ReactiveTaskSupport.whenAll(
+                    unsubscription.getMessage().payload().topics(),
+                    topic -> listener.onUnsubscribe(clientId, topic)
+            );
         });
     }
 

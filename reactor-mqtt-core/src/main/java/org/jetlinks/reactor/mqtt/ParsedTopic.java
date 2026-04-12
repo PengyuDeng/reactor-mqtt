@@ -18,7 +18,7 @@ package org.jetlinks.reactor.mqtt;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
-import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.LEVEL_SEPARATOR;
+import static org.jetlinks.reactor.mqtt.MqttConstants.Topic.LEVEL_SEPARATOR_CHAR;
 
 /**
  * 预解析的 MQTT 主题，使用 Caffeine 缓存避免重复 split
@@ -59,15 +59,45 @@ public final class ParsedTopic implements Topic {
 
     private ParsedTopic(String topic) {
         this.original = topic;
-
-        String[] rawLevels = topic.split(LEVEL_SEPARATOR);
-        this.levels = new String[rawLevels.length];
-
-        for (int i = 0; i < rawLevels.length; i++) {
-            this.levels[i] = internLevel(rawLevels[i]);
-        }
+        this.levels = parseLevels(topic);
 
         this.hashCode = topic.hashCode();
+    }
+
+    private static String[] parseLevels(String topic) {
+        int length = topic.length();
+        if (length == 0) {
+            return new String[]{""};
+        }
+
+        // Match default slash-tokenizing behavior by discarding trailing empty levels.
+        int effectiveLength = length;
+        while (effectiveLength > 0 && topic.charAt(effectiveLength - 1) == LEVEL_SEPARATOR_CHAR) {
+            effectiveLength--;
+        }
+        if (effectiveLength == 0) {
+            return new String[0];
+        }
+
+        int levelCount = 1;
+        for (int i = 0; i < effectiveLength; i++) {
+            if (topic.charAt(i) == LEVEL_SEPARATOR_CHAR) {
+                levelCount++;
+            }
+        }
+
+        String[] levels = new String[levelCount];
+        int levelIndex = 0;
+        int start = 0;
+
+        for (int i = 0; i < effectiveLength; i++) {
+            if (topic.charAt(i) == LEVEL_SEPARATOR_CHAR) {
+                levels[levelIndex++] = internLevel(topic.substring(start, i));
+                start = i + 1;
+            }
+        }
+        levels[levelIndex] = internLevel(topic.substring(start, effectiveLength));
+        return levels;
     }
 
     /**

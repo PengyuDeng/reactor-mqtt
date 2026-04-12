@@ -16,18 +16,15 @@
 package org.jetlinks.reactor.mqtt.client;
 
 import io.netty.handler.codec.mqtt.MqttQoS;
-import org.jetlinks.reactor.mqtt.ParsedTopic;
 import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -92,11 +89,10 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
     public Mono<Void> handleMessage(ClientReceivedPublish publishing) {
         String[] topicLevels = publishing.topic().getLevels();
 
-        Set<SubscriptionHandlers> matchedHandlers = trie.findMatches(topicLevels);
-
-        return Flux.fromIterable(matchedHandlers)
-                   .flatMap(h -> h.handle(publishing))
-                   .then();
+        return ReactiveTaskSupport.whenAll(
+                trie.findMatches(topicLevels),
+                matched -> matched.handle(publishing)
+        );
     }
 
     @Override
@@ -175,11 +171,11 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
             if (SUBSCRIBED.compareAndSet(this, false, true)) {
                 // 首次订阅，发送 SUBSCRIBE 消息到服务器
                 if (connection instanceof DefaultClientConnection c) {
-                    c.doSubscribe(topic, qos)
-                     .subscribe(
-                             v -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
-                             error -> log.log(Level.WARNING, error, () -> "Failed to subscribe to topic: " + topic)
-                     );
+                    c.runManagedTask(
+                            c.doSubscribe(topic, qos),
+                            () -> log.log(Level.FINE, () -> "Successfully subscribed to topic: " + topic),
+                            error -> log.log(Level.WARNING, error, () -> "Failed to subscribe to topic: " + topic)
+                    );
                 }
             }
 
@@ -199,29 +195,22 @@ class TrieBasedSubscriptionManager implements SubscriptionManager {
 
         @Override
         public Mono<Void> handle(ClientReceivedPublish publishing) {
-            return Flux.fromIterable(handlers)
-                       .flatMap(entry -> entry.apply(publishing)
-                                              .onErrorResume(error -> {
-                                                  log.log(Level.WARNING, error,
-                                                          () -> String.format("Handler error for topic [%s]: %s",
-                                                                              topic, error.getMessage()));
-                                                  return Mono.empty();
-                                              }))
-                       .then();
+            return HandlerDispatchSupport.dispatch(handlers, publishing, topic, log);
         }
 
         @Override
         public void dispose() {
-            if ((boolean) SUBSCRIBED.get(this) && connection.isAlive()) {
-                connection.unsubscribe(topic)
-                          .subscribe(null,
-                                     error -> {
-                                         // 只记录非超时错误
-                                         if (!(error instanceof java.util.concurrent.TimeoutException)) {
-                                             log.log(Level.WARNING, error, () -> "Failed to unsubscribe from topic: " + topic);
-                                         }
-                                     }
-                          );
+            if ((boolean) SUBSCRIBED.get(this) && connection.isAlive() && connection instanceof DefaultClientConnection c) {
+                c.runManagedTask(
+                        connection.unsubscribe(topic),
+                        null,
+                        error -> {
+                            // 只记录非超时错误
+                            if (!(error instanceof java.util.concurrent.TimeoutException)) {
+                                log.log(Level.WARNING, error, () -> "Failed to unsubscribe from topic: " + topic);
+                            }
+                        }
+                );
             }
             SUBSCRIBED.set(this, false);
             handlers.clear();

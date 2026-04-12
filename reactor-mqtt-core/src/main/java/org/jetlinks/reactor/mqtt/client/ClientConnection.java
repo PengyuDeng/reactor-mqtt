@@ -39,7 +39,9 @@ import java.util.function.Function;
  *     .connect()
  *     .flatMap(conn -> {
  *         // 订阅主题
- *         Disposable sub = conn.subscribe("/topic", msg -> {
+ *         Disposable sub = conn
+ *             .subscribe
+ *             ("/topic", msg -> {
  *             System.out.println("Received: " + msg.getTopic());
  *             return Mono.empty();
  *         });
@@ -48,7 +50,7 @@ import java.util.function.Function;
  *         return conn.publish("/topic", payload, MqttQoS.AT_LEAST_ONCE)
  *                    .then(conn.onClose());
  *     })
- *     .subscribe();
+ *     .block();
  * }</pre>
  *
  * @author PengyuDeng
@@ -160,11 +162,9 @@ public interface ClientConnection extends MqttConnection {
      *
      * <h3>使用示例：</h3>
      * <pre>{@code
-     * connection.onReconnect()
-     *     .subscribe(attempt -> {
-     *         System.out.println("Reconnected after " + attempt + " attempts!");
-     *         // 可以在此处执行重连后的初始化操作
-     *     });
+     * Flux<Integer> reconnectEvents = connection.onReconnect()
+     *     .doOnNext(attempt ->
+     *         System.out.println("Reconnected after " + attempt + " attempts!"));
      * }</pre>
      *
      * @return 重连成功时发射重连次数的 Flux

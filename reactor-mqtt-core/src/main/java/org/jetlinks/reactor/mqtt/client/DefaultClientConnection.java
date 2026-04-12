@@ -20,12 +20,12 @@ import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
 import org.jetlinks.reactor.mqtt.MqttWillMessage;
+import org.jetlinks.reactor.mqtt.Topic;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
-import reactor.core.scheduler.Schedulers;
 import reactor.netty.Connection;
 import reactor.netty.tcp.TcpClient;
 
@@ -36,6 +36,8 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -211,15 +213,18 @@ public class DefaultClientConnection implements ClientConnection {
 
     private void setupConnectionHandlers() {
         Connection conn = (Connection) CONNECTION.get(this);
-        conn.inbound()
-            .receiveObject()
-            .cast(MqttMessage.class)
-            .flatMap(this::handleMessage)
-            .subscribe(
-                    null,
-                    this::handleError,
-                    this::handleComplete
-            );
+        ReactiveTaskSupport.ManagedTask inboundTask = ReactiveTaskSupport.create(
+                this::handleComplete,
+                this::handleError
+        );
+        conn.onDispose(inboundTask);
+        inboundTask.start(
+                conn.inbound()
+                    .receiveObject()
+                    .cast(MqttMessage.class)
+                    .concatMap(this::handleMessage)
+                    .then()
+        );
 
         conn.onDispose(() -> {
             if (!hasFlag(CLOSED)) {
@@ -307,7 +312,8 @@ public class DefaultClientConnection implements ClientConnection {
             return Mono.empty();
         }
 
-        DefaultClientReceivedPublish publishing = new DefaultClientReceivedPublish(msg, this);
+        Topic topic = Topic.of(msg.variableHeader().topicName());
+        DefaultClientReceivedPublish publishing = new DefaultClientReceivedPublish(msg, topic, this);
 
         // 委托给 SubscriptionManager 处理订阅匹配
         Mono<Void> handlerMono = subscriptionManager.handleMessage(publishing);
@@ -429,64 +435,61 @@ public class DefaultClientConnection implements ClientConnection {
 
         setConnAckSink(Sinks.one());
 
-        Disposable reconnect = config.getReconnectStrategy()
+        Mono<Void> reconnect = config.getReconnectStrategy()
                                      .nextDelay(attempt, null)
-                                     .switchIfEmpty(Mono.defer(() -> {
-                                         log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
-                                         clearFlag(RECONNECTING);
-                                         close().subscribe();
-                                         return Mono.empty();
-                                     }))
-                                     .flatMap(delay -> Mono.delay(delay)
-                                                           .then(Mono.defer(() -> {
-                                                               if (hasFlag(CLOSED)) {
-                                                                   return Mono.empty();
-                                                               }
-                                                               return tcpClientSupplier.get()
-                                                                                       .connect()
-                                                                                       .flatMap(conn -> {
-                                                                                           CONNECTION.set(this, conn);
-                                                                                           return ensureMqttCodec()
-                                                                                                   .then(Mono.fromRunnable(this::setupConnectionHandlers))
-                                                                                                   .then(sendConnect())
-                                                                                                   .then(resubscribeIfNeeded());
-                                                                                       });
-                                                           }))
-                                     )
-                                     .subscribe(
-                                             v -> {
-                                             },
-                                             error -> {
-                                                 clearReconnectTask();
-                                                 clearFlag(RECONNECTING);
-                                                 if (hasFlag(CLOSED)) {
-                                                     return;
-                                                 }
-                                                 log.log(Level.WARNING, () -> "Reconnect failed for client " + config.getClientId() + ": " + error.getMessage());
-                                                 attemptReconnect();
-                                             },
-                                             () -> {
-                                                 clearReconnectTask();
-                                                 clearFlag(RECONNECTING);
-                                                 if (hasFlag(CLOSED)) {
-                                                     return;
-                                                 }
-                                                 log.log(Level.INFO, () -> "Reconnect successful for client " + config.getClientId());
-                                                 if (reconnectSink.currentSubscriberCount() > 0) {
-                                                     reconnectSink.tryEmitNext(attempt);
-                                                 }
-                                             }
-                                     );
+                                     .flatMap(this::reconnectAfterDelay)
+                                     .switchIfEmpty(closeWhenReconnectExhausted());
 
-        if (!RECONNECT_TASK.compareAndSet(this, null, reconnect)) {
-            if (!reconnect.isDisposed()) {
-                reconnect.dispose();
+        ReactiveTaskSupport.ManagedTask[] holder = new ReactiveTaskSupport.ManagedTask[1];
+        ReactiveTaskSupport.ManagedTask reconnectTask = ReactiveTaskSupport.create(
+                () -> onReconnectComplete(attempt, holder[0]),
+                error -> onReconnectError(holder[0], error)
+        );
+        holder[0] = reconnectTask;
+
+        if (!RECONNECT_TASK.compareAndSet(this, null, reconnectTask)) {
+            if (!reconnectTask.isDisposed()) {
+                reconnectTask.dispose();
             }
+            return;
         }
+        reconnectTask.start(reconnect);
 
         if (hasFlag(CLOSED)) {
             cancelReconnect();
         }
+    }
+
+    private Mono<Void> reconnectAfterDelay(Duration delay) {
+        return Mono.delay(delay)
+                   .flatMap(ignored -> reconnectIfOpen());
+    }
+
+    private Mono<Void> reconnectIfOpen() {
+        return Mono.defer(() -> {
+            if (hasFlag(CLOSED)) {
+                return Mono.empty();
+            }
+            return tcpClientSupplier.get()
+                                    .connect()
+                                    .flatMap(this::initializeReconnectedConnection);
+        });
+    }
+
+    private Mono<Void> initializeReconnectedConnection(Connection conn) {
+        CONNECTION.set(this, conn);
+        return ensureMqttCodec()
+                .then(Mono.fromRunnable(this::setupConnectionHandlers))
+                .then(sendConnect())
+                .then(resubscribeIfNeeded());
+    }
+
+    private Mono<Void> closeWhenReconnectExhausted() {
+        return Mono.defer(() -> {
+            log.log(Level.WARNING, () -> "Max reconnect attempts reached for client " + config.getClientId() + ", closing connection");
+            clearFlag(RECONNECTING);
+            return close();
+        });
     }
 
     private Mono<Void> resubscribeIfNeeded() {
@@ -494,17 +497,10 @@ public class DefaultClientConnection implements ClientConnection {
             return Mono.empty();
         }
 
-        Iterable<SubscriptionManager.SubscriptionInfo> subscriptions = subscriptionManager.getSubscriptions();
-
-        // 检查是否有订阅
-        boolean hasSubscriptions = subscriptions.iterator().hasNext();
-        if (!hasSubscriptions) {
-            return Mono.empty();
-        }
-
-        return Flux.fromIterable(subscriptions)
-                   .flatMap(sub -> doSubscribe(sub.topic(), sub.qos()))
-                   .then();
+        return ReactiveTaskSupport.whenAll(
+                subscriptionManager.getSubscriptions(),
+                sub -> doSubscribe(sub.topic(), sub.qos())
+        );
     }
 
     @Override
@@ -536,26 +532,23 @@ public class DefaultClientConnection implements ClientConnection {
             if (qos == MqttQoS.AT_MOST_ONCE) {
                 return send(finalMessage);
             } else if (qos == MqttQoS.AT_LEAST_ONCE) {
-                Sinks.Empty<Void> sink = Sinks.empty();
-                pendingAcks.put(pendingKey(MqttMessageType.PUBACK, messageId), sink);
-                return send(finalMessage)
-                        .then(sink.asMono())
-                        .timeout(config.getPublishTimeout())
-                        .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.PUBACK, messageId)));
+                return sendAndAwaitAck(
+                        finalMessage,
+                        pendingKey(MqttMessageType.PUBACK, messageId),
+                        config.getPublishTimeout()
+                );
             } else {
                 // QoS 2
-                Sinks.Empty<Void> recSink = Sinks.empty();
-                pendingAcks.put(pendingKey(MqttMessageType.PUBREC, messageId), recSink);
+                int pubRecKey = pendingKey(MqttMessageType.PUBREC, messageId);
+                int pubCompKey = pendingKey(MqttMessageType.PUBCOMP, messageId);
+                registerPendingAck(pubRecKey);
                 return send(finalMessage)
-                        .then(recSink.asMono())
-                        .then(Mono.defer(() -> {
-                            Sinks.Empty<Void> compSink = pendingAcks.get(pendingKey(MqttMessageType.PUBCOMP, messageId));
-                            return compSink != null ? compSink.asMono() : Mono.empty();
-                        }))
+                        .then(awaitPendingAck(pubRecKey))
+                        .then(Mono.defer(() -> awaitPendingAck(pubCompKey)))
                         .timeout(config.getPublishTimeout())
                         .doOnError(e -> {
-                            pendingAcks.remove(pendingKey(MqttMessageType.PUBREC, messageId));
-                            pendingAcks.remove(pendingKey(MqttMessageType.PUBCOMP, messageId));
+                            pendingAcks.remove(pubRecKey);
+                            pendingAcks.remove(pubCompKey);
                         });
             }
         });
@@ -607,13 +600,11 @@ public class DefaultClientConnection implements ClientConnection {
                                                                    .addSubscription(qos, topic)
                                                                    .build();
 
-        Sinks.Empty<Void> sink = Sinks.empty();
-        pendingAcks.put(pendingKey(MqttMessageType.SUBACK, messageId), sink);
-
-        return send(subscribeMessage)
-                .then(sink.asMono())
-                .timeout(config.getSubscribeTimeout())
-                .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.SUBACK, messageId)));
+        return sendAndAwaitAck(
+                subscribeMessage,
+                pendingKey(MqttMessageType.SUBACK, messageId),
+                config.getSubscribeTimeout()
+        );
     }
 
 
@@ -634,13 +625,11 @@ public class DefaultClientConnection implements ClientConnection {
 
         MqttUnsubscribeMessage unsubscribeMessage = unsubscribeBuilder.build();
 
-        Sinks.Empty<Void> sink = Sinks.empty();
-        pendingAcks.put(pendingKey(MqttMessageType.UNSUBACK, messageId), sink);
-
-        return send(unsubscribeMessage)
-                .then(sink.asMono())
-                .timeout(config.getUnsubscribeTimeout())
-                .doOnError(e -> pendingAcks.remove(pendingKey(MqttMessageType.UNSUBACK, messageId)));
+        return sendAndAwaitAck(
+                unsubscribeMessage,
+                pendingKey(MqttMessageType.UNSUBACK, messageId),
+                config.getUnsubscribeTimeout()
+        );
     }
 
     @Override
@@ -764,11 +753,20 @@ public class DefaultClientConnection implements ClientConnection {
         long finalIntervalSeconds = intervalSeconds;
         log.log(Level.FINE, () -> "Starting heartbeat for client " + config.getClientId() + " with interval " + finalIntervalSeconds + "s");
 
-        Disposable timer = Flux.interval(Duration.ofSeconds(intervalSeconds), Schedulers.parallel())
-                               .flatMap(tick -> sendPing())
-                               .subscribe(null,
-                                          error -> log.log(Level.WARNING, error, () -> "Heartbeat error for client " + config.getClientId())
-                               );
+        Connection conn = (Connection) CONNECTION.get(this);
+        Disposable timer = asDisposable(
+                conn.channel()
+                    .eventLoop()
+                    .scheduleAtFixedRate(() -> runManagedTask(
+                                    sendPing(),
+                                    null,
+                                    error -> log.log(Level.WARNING, error, () -> "Heartbeat error for client " + config.getClientId())
+                            ),
+                            intervalSeconds,
+                            intervalSeconds,
+                            TimeUnit.SECONDS
+                    )
+        );
         HEARTBEAT_TIMER.setRelease(this, timer);
     }
 
@@ -839,6 +837,27 @@ public class DefaultClientConnection implements ClientConnection {
         return ((int) STATE.getAndAdd(this, ATTEMPT_INCREMENT) + ATTEMPT_INCREMENT) >>> 3;
     }
 
+    private Sinks.Empty<Void> registerPendingAck(int key) {
+        Sinks.Empty<Void> sink = Sinks.empty();
+        pendingAcks.put(key, sink);
+        return sink;
+    }
+
+    private Mono<Void> awaitPendingAck(int key) {
+        return Mono.defer(() -> {
+            Sinks.Empty<Void> sink = pendingAcks.get(key);
+            return sink != null ? sink.asMono() : Mono.empty();
+        });
+    }
+
+    private Mono<Void> sendAndAwaitAck(MqttMessage message, int ackKey, Duration timeout) {
+        registerPendingAck(ackKey);
+        return send(message)
+                .then(awaitPendingAck(ackKey))
+                .timeout(timeout)
+                .doOnError(error -> pendingAcks.remove(ackKey));
+    }
+
     /**
      * 重置重连次数为0,保留状态标志
      */
@@ -857,6 +876,24 @@ public class DefaultClientConnection implements ClientConnection {
         }
     }
 
+    void runManagedTask(Mono<Void> task, Runnable onComplete, Consumer<Throwable> onError) {
+        ReactiveTaskSupport.start(task, onComplete, onError);
+    }
+
+    private Disposable asDisposable(io.netty.util.concurrent.Future<?> future) {
+        return new Disposable() {
+            @Override
+            public void dispose() {
+                future.cancel(true);
+            }
+
+            @Override
+            public boolean isDisposed() {
+                return future.isCancelled() || future.isDone();
+            }
+        };
+    }
+
     @SuppressWarnings("unchecked")
     private Sinks.One<MqttConnAckMessage> currentConnAckSink() {
         return (Sinks.One<MqttConnAckMessage>) CONN_ACK_SINK.getAcquire(this);
@@ -866,8 +903,30 @@ public class DefaultClientConnection implements ClientConnection {
         CONN_ACK_SINK.setRelease(this, sink);
     }
 
-    private void clearReconnectTask() {
-        RECONNECT_TASK.setRelease(this, null);
+    private void onReconnectComplete(int attempt, Disposable task) {
+        clearReconnectTask(task);
+        clearFlag(RECONNECTING);
+        if (hasFlag(CLOSED)) {
+            return;
+        }
+        log.log(Level.INFO, () -> "Reconnect successful for client " + config.getClientId());
+        if (reconnectSink.currentSubscriberCount() > 0) {
+            reconnectSink.tryEmitNext(attempt);
+        }
+    }
+
+    private void onReconnectError(Disposable task, Throwable error) {
+        clearReconnectTask(task);
+        clearFlag(RECONNECTING);
+        if (hasFlag(CLOSED)) {
+            return;
+        }
+        log.log(Level.WARNING, () -> "Reconnect failed for client " + config.getClientId() + ": " + error.getMessage());
+        attemptReconnect();
+    }
+
+    private void clearReconnectTask(Disposable task) {
+        RECONNECT_TASK.compareAndSet(this, task, null);
     }
 
     public static class MqttConnectionException extends RuntimeException {

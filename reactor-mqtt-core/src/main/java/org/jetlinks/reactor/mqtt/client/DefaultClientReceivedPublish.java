@@ -33,44 +33,35 @@ import static org.jetlinks.reactor.mqtt.MqttConstants.MessageHeader.PUBREC_HEADE
 class DefaultClientReceivedPublish implements ClientReceivedPublish {
 
     private final MqttPublishMessage message;
+    private final Topic topic;
     private final DefaultClientConnection connection;
 
     @SuppressWarnings("unused")
     private volatile boolean acknowledged = false;
     @SuppressWarnings("unused")
     private volatile boolean released = false;
-    @SuppressWarnings("unused")
-    private volatile Topic cachedTopic;
 
     private static final VarHandle ACKNOWLEDGED;
     private static final VarHandle RELEASED;
-    private static final VarHandle CACHED_TOPIC;
 
     static {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             ACKNOWLEDGED = lookup.findVarHandle(DefaultClientReceivedPublish.class, "acknowledged", boolean.class);
             RELEASED = lookup.findVarHandle(DefaultClientReceivedPublish.class, "released", boolean.class);
-            CACHED_TOPIC = lookup.findVarHandle(DefaultClientReceivedPublish.class, "cachedTopic", Topic.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
     }
 
-    DefaultClientReceivedPublish(MqttPublishMessage message, DefaultClientConnection connection) {
+    DefaultClientReceivedPublish(MqttPublishMessage message, Topic topic, DefaultClientConnection connection) {
         this.message = message;
+        this.topic = topic;
         this.connection = connection;
     }
 
     @Override
     public Topic topic() {
-        Topic topic = (Topic) CACHED_TOPIC.getAcquire(this);
-        if (topic == null) {
-            topic = Topic.of(message.variableHeader().topicName());
-            if (!CACHED_TOPIC.compareAndSet(this, null, topic)) {
-                topic = (Topic) CACHED_TOPIC.getAcquire(this);
-            }
-        }
         return topic;
     }
 

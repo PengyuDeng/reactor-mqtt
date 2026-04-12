@@ -247,6 +247,10 @@ public interface MqttClient {
     /**
      * 阻塞并连接到服务器
      *
+     * <p>这是面向同步调用方的边界便捷 API，会在当前线程等待连接完成。
+     * 响应式业务链、事件处理器和其他非阻塞流程应优先使用 {@link #connect()}，
+     * 避免在响应式执行路径中回退到阻塞调用。</p>
+     *
      * @return 连接实例
      */
     ClientConnection connectNow();

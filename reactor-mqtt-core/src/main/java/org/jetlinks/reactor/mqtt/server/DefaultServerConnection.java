@@ -19,11 +19,12 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.util.ReferenceCountUtil;
+import org.jetlinks.reactor.mqtt.Acknowledge;
 import org.jetlinks.reactor.mqtt.MqttAuth;
 import org.jetlinks.reactor.mqtt.MqttConstants;
 import org.jetlinks.reactor.mqtt.MqttWillMessage;
-import org.reactivestreams.Publisher;
-import reactor.core.publisher.Flux;
+import org.jetlinks.reactor.mqtt.Topic;
+import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
@@ -34,6 +35,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -60,6 +62,7 @@ public class DefaultServerConnection implements ServerConnection {
     private static final VarHandle UNSUBSCRIBE_HANDLER;
     private static final VarHandle AUTO_ACK;
     private static final VarHandle MESSAGE_ID_GENERATOR;
+    private static final VarHandle KEEP_ALIVE_CHECK_TASK;
 
     static {
         try {
@@ -74,6 +77,7 @@ public class DefaultServerConnection implements ServerConnection {
             UNSUBSCRIBE_HANDLER = lookup.findVarHandle(DefaultServerConnection.class, "unsubscribeHandler", Function.class);
             AUTO_ACK = lookup.findVarHandle(DefaultServerConnection.class, "autoAck", boolean.class);
             MESSAGE_ID_GENERATOR = lookup.findVarHandle(DefaultServerConnection.class, "messageId", int.class);
+            KEEP_ALIVE_CHECK_TASK = lookup.findVarHandle(DefaultServerConnection.class, "keepAliveCheckTask", Disposable.class);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -112,6 +116,8 @@ public class DefaultServerConnection implements ServerConnection {
 
     @SuppressWarnings("unused")
     private volatile int messageId = 0;
+    @SuppressWarnings("unused")
+    private volatile Disposable keepAliveCheckTask;
 
     private final Sinks.One<MqttConnectMessage> connectSink = Sinks.one();
 
@@ -127,22 +133,10 @@ public class DefaultServerConnection implements ServerConnection {
         this.connection = (Connection) inbound;
         AUTO_ACK.set(this, autoAck);
         LAST_PING_TIME.set(this, System.currentTimeMillis());
-
-        // 启动 KeepAlive 超时检测
-        Flux.interval(Duration.ofSeconds(30))
-            .takeUntil(v -> !isAlive())
-            .subscribe(tick -> {
-                long now = System.currentTimeMillis();
-                long lastPing = getLastPingTime();
-                long timeout = (long) KEEP_ALIVE_TIMEOUT_MS.get(this);
-
-                if (now - lastPing > timeout) {
-                    log.log(Level.WARNING, () -> "Client " + CLIENT_ID.get(this) + " keepalive timeout, closing connection");
-                    close().subscribe();
-                }
-            });
+        startKeepAliveCheck();
 
         connection.onDispose(() -> {
+            stopKeepAliveCheck();
             if (casSetClosed()) {
                 emitEmpty(disposeSink);
             }
@@ -156,21 +150,29 @@ public class DefaultServerConnection implements ServerConnection {
      * @return 连接完整生命周期的 Mono
      */
     public Mono<Void> run(Function<ServerConnection, Mono<Void>> handler) {
-        return handleInbound()
-                .mergeWith(awaitConnect()
-                                   .flatMap(msg -> handler != null ? handler.apply(this) : accept())
-                                   .onErrorResume(err -> close()))
+        return Mono.when(
+                        handleInbound(),
+                        runConnectionHandler(handler)
+                )
                 .then(onClose());
     }
 
     /**
      * 启动消息处理流程（用于 handle 模式）
      */
-    private Flux<Void> handleInbound() {
+    private Mono<Void> handleInbound() {
         return inbound
                 .receiveObject()
                 .cast(MqttMessage.class)
-                .concatMap(this::handleMqttMessageSync);
+                .concatMap(this::handleMqttMessageSync)
+                .then();
+    }
+
+    private Mono<Void> runConnectionHandler(Function<ServerConnection, Mono<Void>> handler) {
+        Function<ServerConnection, Mono<Void>> actualHandler = handler != null ? handler : ignored -> accept();
+        return awaitConnect()
+                .then(Mono.defer(() -> actualHandler.apply(this)))
+                .onErrorResume(error -> close());
     }
 
     /**
@@ -223,6 +225,48 @@ public class DefaultServerConnection implements ServerConnection {
         }
     }
 
+    private void startKeepAliveCheck() {
+        stopKeepAliveCheck();
+        Disposable task = asDisposable(
+                connection.channel()
+                          .eventLoop()
+                          .scheduleAtFixedRate(() -> {
+                              if (!isAlive()) {
+                                  return;
+                              }
+                              long now = System.currentTimeMillis();
+                              long lastPing = getLastPingTime();
+                              long timeout = (long) KEEP_ALIVE_TIMEOUT_MS.get(this);
+                              if (now - lastPing > timeout) {
+                                  log.log(Level.WARNING, () -> "Client " + CLIENT_ID.get(this) + " keepalive timeout, closing connection");
+                                  connection.dispose();
+                              }
+                          }, 30, 30, TimeUnit.SECONDS)
+        );
+        KEEP_ALIVE_CHECK_TASK.set(this, task);
+    }
+
+    private void stopKeepAliveCheck() {
+        Disposable task = (Disposable) KEEP_ALIVE_CHECK_TASK.getAndSet(this, null);
+        if (task != null && !task.isDisposed()) {
+            task.dispose();
+        }
+    }
+
+    private Disposable asDisposable(io.netty.util.concurrent.Future<?> future) {
+        return new Disposable() {
+            @Override
+            public void dispose() {
+                future.cancel(true);
+            }
+
+            @Override
+            public boolean isDisposed() {
+                return future.isCancelled() || future.isDone();
+            }
+        };
+    }
+
     private Mono<Void> handleMqttMessageSync(MqttMessage msg) {
         return Mono.defer(() -> {
             LAST_PING_TIME.set(this, System.currentTimeMillis());
@@ -257,9 +301,8 @@ public class DefaultServerConnection implements ServerConnection {
 
     @SuppressWarnings("unchecked")
     private Mono<Void> handlePublishSync(MqttPublishMessage msg) {
-        Function<ServerReceivedPublish, Mono<Void>> handler =
-                (Function<ServerReceivedPublish, Mono<Void>>) PUBLISH_HANDLER.get(this);
-        boolean shouldAutoAck = (boolean) AUTO_ACK.get(this) && msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE;
+        Function<ServerReceivedPublish, Mono<Void>> handler = currentPublishHandler();
+        boolean shouldAutoAck = shouldAutoAck(msg);
 
         // 没有 handler 时，根据 autoAck 配置决定是否发送 ACK
         if (handler == null && shouldAutoAck) {
@@ -274,15 +317,10 @@ public class DefaultServerConnection implements ServerConnection {
             return Mono.empty();
         }
 
-        DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, this);
+        Topic topic = Topic.of(msg.variableHeader().topicName());
+        DefaultServerReceivedPublish publishing = new DefaultServerReceivedPublish(msg, topic, this);
 
-        Mono<Void> handlerMono = handler != null ? handler.apply(publishing) : Mono.empty();
-
-        if (shouldAutoAck) {
-            return handlerMono.then(publishing.ack())
-                              .doFinally(signal -> publishing.release());
-        }
-        return handlerMono.doFinally(signal -> publishing.release());
+        return handlePublish(publishing, handler, shouldAutoAck);
     }
 
     private Mono<Void> sendAck(MqttPublishMessage msg) {
@@ -307,27 +345,13 @@ public class DefaultServerConnection implements ServerConnection {
     @SuppressWarnings("unchecked")
     private Mono<Void> handleSubscribeMsg(MqttSubscribeMessage msg) {
         DefaultMqttSubscription sub = new DefaultMqttSubscription(msg, this);
-
-        Function<MqttSubscription, Mono<Void>> handler =
-                (Function<MqttSubscription, Mono<Void>>) SUBSCRIBE_HANDLER.get(this);
-        if (handler != null) {
-            return handler.apply(sub).then(sub.ack());
-        }
-
-        return sub.ack();
+        return invokeHandlerAndAck(sub, currentSubscribeHandler());
     }
 
     @SuppressWarnings("unchecked")
     private Mono<Void> handleUnsubscribeMsg(MqttUnsubscribeMessage msg) {
         DefaultMqttUnsubscription unsub = new DefaultMqttUnsubscription(msg, this);
-
-        Function<MqttUnsubscription, Mono<Void>> handler =
-                (Function<MqttUnsubscription, Mono<Void>>) UNSUBSCRIBE_HANDLER.get(this);
-        if (handler != null) {
-            return handler.apply(unsub).then(unsub.ack());
-        }
-
-        return unsub.ack();
+        return invokeHandlerAndAck(unsub, currentUnsubscribeHandler());
     }
 
     private Mono<Void> handlePubRec(MqttMessageIdVariableHeader header) {
@@ -352,10 +376,6 @@ public class DefaultServerConnection implements ServerConnection {
 
     Mono<Void> send(MqttMessage msg) {
         return outbound.sendObject(Mono.just(msg)).then();
-    }
-
-    private Mono<Void> send(Publisher<Object> msg) {
-        return outbound.sendObject(msg).then();
     }
 
     public Mono<MqttConnectMessage> awaitConnect() {
@@ -550,6 +570,7 @@ public class DefaultServerConnection implements ServerConnection {
                 return Mono.empty();
             }
             return Mono.fromRunnable(() -> {
+                stopKeepAliveCheck();
                 emitEmpty(disposeSink);
                 connection.dispose();
             });
@@ -569,6 +590,43 @@ public class DefaultServerConnection implements ServerConnection {
     @Override
     public Mono<Void> setKeepAliveTimeout(Duration duration) {
         return Mono.fromRunnable(() -> KEEP_ALIVE_TIMEOUT_MS.set(this, duration.toMillis()));
+    }
+
+    private Mono<Void> handlePublish(DefaultServerReceivedPublish publishing,
+                                     Function<ServerReceivedPublish, Mono<Void>> handler,
+                                     boolean shouldAutoAck) {
+        Mono<Void> task = invokeHandler(publishing, handler);
+        if (shouldAutoAck) {
+            task = task.then(publishing.ack());
+        }
+        return task.doFinally(signal -> publishing.release());
+    }
+
+    private <T> Mono<Void> invokeHandler(T value, Function<T, Mono<Void>> handler) {
+        return handler == null ? Mono.empty() : Mono.defer(() -> handler.apply(value));
+    }
+
+    private <T extends Acknowledge> Mono<Void> invokeHandlerAndAck(T value, Function<T, Mono<Void>> handler) {
+        return invokeHandler(value, handler).then(value.ack());
+    }
+
+    @SuppressWarnings("unchecked")
+    private Function<ServerReceivedPublish, Mono<Void>> currentPublishHandler() {
+        return (Function<ServerReceivedPublish, Mono<Void>>) PUBLISH_HANDLER.get(this);
+    }
+
+    private boolean shouldAutoAck(MqttPublishMessage msg) {
+        return (boolean) AUTO_ACK.get(this) && msg.fixedHeader().qosLevel() != MqttQoS.AT_MOST_ONCE;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Function<MqttSubscription, Mono<Void>> currentSubscribeHandler() {
+        return (Function<MqttSubscription, Mono<Void>>) SUBSCRIBE_HANDLER.get(this);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Function<MqttUnsubscription, Mono<Void>> currentUnsubscribeHandler() {
+        return (Function<MqttUnsubscription, Mono<Void>>) UNSUBSCRIBE_HANDLER.get(this);
     }
 
     /**

@@ -36,6 +36,7 @@ import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -239,7 +240,10 @@ public class DefaultServerConnection implements ServerConnection {
                               long timeout = (long) KEEP_ALIVE_TIMEOUT_MS.get(this);
                               if (now - lastPing > timeout) {
                                   log.log(Level.WARNING, () -> "Client " + CLIENT_ID.get(this) + " keepalive timeout, closing connection");
-                                  connection.dispose();
+                                  runManagedTask(
+                                          close(),
+                                          error -> log.log(Level.WARNING, error, () -> "Failed to close timed out connection for client " + CLIENT_ID.get(this))
+                                  );
                               }
                           }, 30, 30, TimeUnit.SECONDS)
         );
@@ -265,6 +269,10 @@ public class DefaultServerConnection implements ServerConnection {
                 return future.isCancelled() || future.isDone();
             }
         };
+    }
+
+    void runManagedTask(Mono<Void> task, Consumer<Throwable> onError) {
+        ReactiveTaskSupport.start(task, onError);
     }
 
     private Mono<Void> handleMqttMessageSync(MqttMessage msg) {

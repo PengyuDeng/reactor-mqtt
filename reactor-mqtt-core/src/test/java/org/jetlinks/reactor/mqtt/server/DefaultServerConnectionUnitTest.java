@@ -19,6 +19,8 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -53,11 +55,30 @@ class DefaultServerConnectionUnitTest {
         ReferenceCountUtil.safeRelease(message);
     }
 
+    @Test
+    void shouldInvokeCloseHookWhenKeepAliveTimesOut() throws Exception {
+        AtomicReference<Runnable> keepAliveTask = new AtomicReference<>();
+        CloseTrackingServerConnection connection = newCloseTrackingConnection(keepAliveTask);
+
+        setLastPingTime(connection, 0L);
+        connection.setKeepAliveTimeout(Duration.ofMillis(1)).block(Duration.ofSeconds(1));
+
+        keepAliveTask.get().run();
+
+        assertEquals(1, connection.closeCalls.get());
+        StepVerifier.create(connection.onClose())
+                    .verifyComplete();
+    }
+
     private DefaultServerConnection newConnection(boolean autoAck) {
+        return newConnection(autoAck, null);
+    }
+
+    private DefaultServerConnection newConnection(boolean autoAck, AtomicReference<Runnable> keepAliveTask) {
         NettyInbound inbound = (NettyInbound) Proxy.newProxyInstance(
                 NettyInbound.class.getClassLoader(),
                 new Class[]{NettyInbound.class, Connection.class},
-                newInboundHandler()
+                newInboundHandler(keepAliveTask)
         );
         NettyOutbound outbound = (NettyOutbound) Proxy.newProxyInstance(
                 NettyOutbound.class.getClassLoader(),
@@ -67,9 +88,23 @@ class DefaultServerConnectionUnitTest {
         return new DefaultServerConnection(inbound, outbound, autoAck);
     }
 
-    private InvocationHandler newInboundHandler() {
+    private CloseTrackingServerConnection newCloseTrackingConnection(AtomicReference<Runnable> keepAliveTask) {
+        NettyInbound inbound = (NettyInbound) Proxy.newProxyInstance(
+                NettyInbound.class.getClassLoader(),
+                new Class[]{NettyInbound.class, Connection.class},
+                newInboundHandler(keepAliveTask)
+        );
+        NettyOutbound outbound = (NettyOutbound) Proxy.newProxyInstance(
+                NettyOutbound.class.getClassLoader(),
+                new Class[]{NettyOutbound.class},
+                (proxy, method, args) -> defaultValue(method.getReturnType())
+        );
+        return new CloseTrackingServerConnection(inbound, outbound);
+    }
+
+    private InvocationHandler newInboundHandler(AtomicReference<Runnable> keepAliveTask) {
         ScheduledFuture<?> future = newScheduledFuture();
-        EventLoop eventLoop = newEventLoop(future);
+        EventLoop eventLoop = newEventLoop(future, keepAliveTask);
         Channel channel = newChannel(eventLoop);
 
         return (proxy, method, args) -> switch (method.getName()) {
@@ -81,9 +116,12 @@ class DefaultServerConnectionUnitTest {
         };
     }
 
-    private EventLoop newEventLoop(ScheduledFuture<?> future) {
+    private EventLoop newEventLoop(ScheduledFuture<?> future, AtomicReference<Runnable> keepAliveTask) {
         InvocationHandler handler = (proxy, method, args) -> {
             if ("scheduleAtFixedRate".equals(method.getName())) {
+                if (keepAliveTask != null) {
+                    keepAliveTask.set((Runnable) args[0]);
+                }
                 return future;
             }
             return defaultValue(method.getReturnType());
@@ -120,6 +158,27 @@ class DefaultServerConnectionUnitTest {
                 new Class[]{ScheduledFuture.class},
                 handler
         );
+    }
+
+    private void setLastPingTime(DefaultServerConnection connection, long lastPingTime) throws Exception {
+        java.lang.reflect.Field field = DefaultServerConnection.class.getDeclaredField("lastPingTime");
+        field.setAccessible(true);
+        field.setLong(connection, lastPingTime);
+    }
+
+    private static final class CloseTrackingServerConnection extends DefaultServerConnection {
+
+        private final AtomicInteger closeCalls = new AtomicInteger();
+
+        private CloseTrackingServerConnection(NettyInbound inbound, NettyOutbound outbound) {
+            super(inbound, outbound, true);
+        }
+
+        @Override
+        public Mono<Void> close() {
+            closeCalls.incrementAndGet();
+            return super.close();
+        }
     }
 
     private Object defaultValue(Class<?> type) {

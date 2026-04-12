@@ -218,19 +218,21 @@ public class DefaultClientConnection implements ClientConnection {
                 this::handleError
         );
         conn.onDispose(inboundTask);
-        inboundTask.start(
+        inboundTask.start(handleInboundMessages(
                 conn.inbound()
                     .receiveObject()
                     .cast(MqttMessage.class)
-                    .concatMap(this::handleMessage)
-                    .then()
-        );
+        ));
 
         conn.onDispose(() -> {
             if (!hasFlag(CLOSED)) {
                 handleDisconnect();
             }
         });
+    }
+
+    Mono<Void> handleInboundMessages(Flux<MqttMessage> inboundMessages) {
+        return inboundMessages.flatMap(this::handleMessage).then();
     }
 
     private Mono<Void> sendConnect() {

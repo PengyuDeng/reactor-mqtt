@@ -233,11 +233,8 @@ public interface MqttClient {
     /**
      * 设置订阅管理器
      *
-     * <p>允许用户自定义订阅管理器实现，或选择不同的内置实现：</p>
-     * <ul>
-     *     <li>{@link SubscriptionManager#create()} - 默认实现，适合少量订阅</li>
-     *     <li>{@link SubscriptionManager#createTrieBased()} - 基于Trie树的高性能实现，适合大量订阅</li>
-     * </ul>
+     * <p>允许用户自定义订阅管理器实现；内置默认实现可通过
+     * {@link SubscriptionManager#create()} 获取，直接使用 Trie 分发。</p>
      *
      * @param subscriptionManager 订阅管理器实例
      * @return 当前实例

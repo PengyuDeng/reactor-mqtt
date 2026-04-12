@@ -1,12 +1,17 @@
 package org.jetlinks.reactor.mqtt.server;
 
+import org.reactivestreams.Publisher;
+import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Mono;
 
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 final class ReactiveTaskSupport {
+
+    private static final BiConsumer<Publisher<Void>, Subscriber<? super Void>> TASK_STARTER = Publisher::subscribe;
 
     private ReactiveTaskSupport() {
     }
@@ -25,7 +30,7 @@ final class ReactiveTaskSupport {
         }
 
         private void start(Mono<Void> task) {
-            task.subscribeWith(this);
+            TASK_STARTER.accept(task, this);
         }
 
         @Override

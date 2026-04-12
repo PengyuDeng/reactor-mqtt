@@ -32,6 +32,10 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class TopicTrieTest {
 
+    private static final int ROOM_COUNT = 100;
+    private static final int DEVICE_COUNT = 50;
+    private static final int METRIC_COUNT = 20;
+
     private TopicTrie<String> trie;
 
     @BeforeEach
@@ -216,12 +220,13 @@ class TopicTrieTest {
     void testPerformance() {
         int subscriptionCount = 10_000;
         for (int i = 0; i < subscriptionCount; i++) {
-            String topic = "sensor/room" + (i % 100) + "/device" + (i % 50) + "/metric" + (i % 20);
+            String topic = topicForIndex(i);
             trie.addSubscription(Topic.of(topic).getLevels(), "client" + i);
         }
 
+        String publishTopic = topicForIndex(3_105);
         long startTime = System.nanoTime();
-        Set<String> matches = trie.findMatches(Topic.of("sensor/room5/device10/metric3").getLevels());
+        Set<String> matches = trie.findMatches(Topic.of(publishTopic).getLevels());
         long endTime = System.nanoTime();
 
         double durationMs = (endTime - startTime) / 1_000_000.0;
@@ -229,6 +234,7 @@ class TopicTrieTest {
         System.out.printf("TopicTrie Performance: Found %d matches in %.3f ms (10,000 subscriptions)%n",
                 matches.size(), durationMs);
 
+        assertFalse(matches.isEmpty(), "Performance lookup should hit existing subscriptions");
         assertTrue(durationMs < 1.0, "Lookup should be < 1ms, but was: " + durationMs + " ms");
     }
 
@@ -237,7 +243,7 @@ class TopicTrieTest {
         int subscriptionCount = 10_000;
 
         for (int i = 0; i < subscriptionCount; i++) {
-            String topic = "sensor/room" + (i % 100) + "/device" + (i % 50) + "/metric" + (i % 20);
+            String topic = topicForIndex(i);
             trie.addSubscription(Topic.of(topic).getLevels(), "client" + i);
         }
 
@@ -285,5 +291,11 @@ class TopicTrieTest {
         }
 
         assertEquals(threadCount * subscriptionsPerThread, trie.getTotalSubscriptionCount());
+    }
+
+    private String topicForIndex(int i) {
+        return "sensor/room" + (i % ROOM_COUNT)
+                + "/device" + (i % DEVICE_COUNT)
+                + "/metric" + (i % METRIC_COUNT);
     }
 }

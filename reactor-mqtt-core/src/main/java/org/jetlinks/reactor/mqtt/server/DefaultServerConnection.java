@@ -25,6 +25,7 @@ import org.jetlinks.reactor.mqtt.MqttConstants;
 import org.jetlinks.reactor.mqtt.MqttWillMessage;
 import org.jetlinks.reactor.mqtt.Topic;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
@@ -162,11 +163,15 @@ public class DefaultServerConnection implements ServerConnection {
      * 启动消息处理流程（用于 handle 模式）
      */
     private Mono<Void> handleInbound() {
-        return inbound
-                .receiveObject()
-                .cast(MqttMessage.class)
-                .concatMap(this::handleMqttMessageSync)
-                .then();
+        return handleInboundMessages(
+                inbound
+                        .receiveObject()
+                        .cast(MqttMessage.class)
+        );
+    }
+
+    Mono<Void> handleInboundMessages(Flux<MqttMessage> inboundMessages) {
+        return inboundMessages.flatMap(this::handleMqttMessageSync).then();
     }
 
     private Mono<Void> runConnectionHandler(Function<ServerConnection, Mono<Void>> handler) {

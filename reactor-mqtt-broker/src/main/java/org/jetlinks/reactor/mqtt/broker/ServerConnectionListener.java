@@ -15,8 +15,9 @@
  */
 package org.jetlinks.reactor.mqtt.broker;
 
-import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.server.ServerConnection;
+import org.jetlinks.reactor.mqtt.server.ServerReceivedPublish;
 import reactor.core.publisher.Mono;
 
 /**
@@ -57,7 +58,7 @@ public interface ServerConnectionListener {
      * @param topic    订阅的主题
      * @return 处理完成的Mono
      */
-    default Mono<Void> onSubscribe(String clientId, String topic) {
+    default Mono<Void> onSubscribe(String clientId, Topic topic) {
         return Mono.empty();
     }
 
@@ -68,7 +69,7 @@ public interface ServerConnectionListener {
      * @param topic    取消订阅的主题
      * @return 处理完成的Mono
      */
-    default Mono<Void> onUnsubscribe(String clientId, String topic) {
+    default Mono<Void> onUnsubscribe(String clientId, Topic topic) {
         return Mono.empty();
     }
 
@@ -76,10 +77,10 @@ public interface ServerConnectionListener {
      * 当客户端发布消息时触发
      *
      * @param clientId 客户端ID
-     * @param message  发布的消息
+     * @param publish  发布的消息
      * @return 处理完成的Mono
      */
-    default Mono<Void> onPublish(String clientId, MqttPublishMessage message) {
+    default Mono<Void> onPublish(String clientId, ServerReceivedPublish publish) {
         return Mono.empty();
     }
 

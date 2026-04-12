@@ -26,19 +26,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 class SubscriptionManagerUnitTest {
 
     @Test
-    void defaultSubscriptionManagerShouldNotRemoveReplacementHandlers() throws Exception {
-        DefaultSubscriptionManager manager = new DefaultSubscriptionManager();
-        TestClientConnection connection = new TestClientConnection();
-
-        Disposable oldSubscription = manager.subscribe(connection, "test/topic", MqttQoS.AT_MOST_ONCE, msg -> Mono.empty());
-
-        Map<String, Object> subscriptions = getField(manager, "subscriptions");
-        Object replacementHandlers = newDefaultHandlers(manager, connection, "test/topic", MqttQoS.AT_MOST_ONCE);
-        subscriptions.put("test/topic", replacementHandlers);
-
-        oldSubscription.dispose();
-
-        assertSame(replacementHandlers, subscriptions.get("test/topic"));
+    void factorySubscriptionManagerShouldCreateTrieBasedImplementation() {
+        SubscriptionManager manager = SubscriptionManager.create();
+        assertSame(TrieBasedSubscriptionManager.class, manager.getClass());
     }
 
     @Test
@@ -58,8 +48,8 @@ class SubscriptionManagerUnitTest {
     }
 
     @Test
-    void defaultSubscriptionManagerShouldDispatchAllMatchingHandlersAndIgnoreHandlerErrors() {
-        DefaultSubscriptionManager manager = new DefaultSubscriptionManager();
+    void factorySubscriptionManagerShouldDispatchAllMatchingHandlersAndIgnoreHandlerErrors() {
+        SubscriptionManager manager = SubscriptionManager.create();
         AtomicInteger invoked = new AtomicInteger();
 
         manager.subscribe(new TestClientConnection(), "test/+", MqttQoS.AT_MOST_ONCE, msg -> {
@@ -107,24 +97,17 @@ class SubscriptionManagerUnitTest {
 
     @SuppressWarnings("unchecked")
     private <T> T getField(Object target, String name) throws Exception {
-        Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return (T) field.get(target);
-    }
-
-    private Object newDefaultHandlers(DefaultSubscriptionManager manager,
-                                      ClientConnection connection,
-                                      String topic,
-                                      MqttQoS qos) throws Exception {
-        Class<?> type = Class.forName("org.jetlinks.reactor.mqtt.client.DefaultSubscriptionManager$DefaultSubscriptionHandlers");
-        Constructor<?> constructor = type.getDeclaredConstructor(
-                DefaultSubscriptionManager.class,
-                String.class,
-                MqttQoS.class,
-                ClientConnection.class
-        );
-        constructor.setAccessible(true);
-        return constructor.newInstance(manager, topic, qos, connection);
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return (T) field.get(target);
+            } catch (NoSuchFieldException ignore) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
     }
 
     private Object newTrieHandlers(ClientConnection connection,

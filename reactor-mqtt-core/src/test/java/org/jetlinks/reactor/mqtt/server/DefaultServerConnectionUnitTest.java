@@ -9,7 +9,9 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.netty.Connection;
 import reactor.netty.NettyInbound;
 import reactor.netty.NettyOutbound;
@@ -68,6 +70,41 @@ class DefaultServerConnectionUnitTest {
         assertEquals(1, connection.closeCalls.get());
         StepVerifier.create(connection.onClose())
                     .verifyComplete();
+    }
+
+    @Test
+    void shouldAllowLaterInboundMessagesToProgressWhilePublishHandlerIsPending() throws Exception {
+        DefaultServerConnection connection = newConnection(false);
+        Sinks.Empty<Void> releaseFirst = Sinks.empty();
+
+        connection.handlePublishing(msg -> {
+            if ("first/topic".equals(msg.topic().getValue())) {
+                return releaseFirst.asMono();
+            }
+            if ("second/topic".equals(msg.topic().getValue())) {
+                releaseFirst.tryEmitEmpty();
+            }
+            return Mono.empty();
+        });
+        setAccepted(connection);
+
+        MqttPublishMessage first = MqttMessageBuilders.publish()
+                                                      .topicName("first/topic")
+                                                      .payload(Unpooled.buffer().writeByte(1))
+                                                      .qos(MqttQoS.AT_MOST_ONCE)
+                                                      .build();
+        MqttPublishMessage second = MqttMessageBuilders.publish()
+                                                       .topicName("second/topic")
+                                                       .payload(Unpooled.buffer().writeByte(2))
+                                                       .qos(MqttQoS.AT_MOST_ONCE)
+                                                       .build();
+
+        StepVerifier.create(connection.handleInboundMessages(Flux.just(first, second)))
+                    .verifyComplete();
+
+        connection.close().block(Duration.ofSeconds(1));
+        ReferenceCountUtil.safeRelease(first);
+        ReferenceCountUtil.safeRelease(second);
     }
 
     private DefaultServerConnection newConnection(boolean autoAck) {
@@ -164,6 +201,12 @@ class DefaultServerConnectionUnitTest {
         java.lang.reflect.Field field = DefaultServerConnection.class.getDeclaredField("lastPingTime");
         field.setAccessible(true);
         field.setLong(connection, lastPingTime);
+    }
+
+    private void setAccepted(DefaultServerConnection connection) throws Exception {
+        java.lang.reflect.Field field = DefaultServerConnection.class.getDeclaredField("state");
+        field.setAccessible(true);
+        field.setByte(connection, (byte) 2);
     }
 
     private static final class CloseTrackingServerConnection extends DefaultServerConnection {

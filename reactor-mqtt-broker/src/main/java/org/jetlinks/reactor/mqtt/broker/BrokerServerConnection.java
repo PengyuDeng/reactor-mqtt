@@ -15,7 +15,7 @@
  */
 package org.jetlinks.reactor.mqtt.broker;
 
-import io.netty.handler.codec.mqtt.MqttPublishMessage;
+import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.server.DefaultServerConnection;
 import reactor.core.publisher.Mono;
 import reactor.netty.NettyInbound;
@@ -47,15 +47,14 @@ class BrokerServerConnection extends DefaultServerConnection {
         // 设置消息处理器，拦截 PUBLISH、SUBSCRIBE、UNSUBSCRIBE 事件并通知 listener
         super.handlePublishing(publish -> {
             String clientId = getClientId();
-            MqttPublishMessage message = publish.message();
-            return listener.onPublish(clientId, message);
+            return listener.onPublish(clientId, publish);
         });
 
         super.handleSubscribe(subscription -> {
             String clientId = getClientId();
             return ReactiveTaskSupport.whenAll(
                     subscription.getMessage().payload().topicSubscriptions(),
-                    topicSub -> listener.onSubscribe(clientId, topicSub.topicFilter())
+                    topicSub -> listener.onSubscribe(clientId, Topic.of(topicSub.topicFilter()))
             );
         });
 
@@ -63,7 +62,7 @@ class BrokerServerConnection extends DefaultServerConnection {
             String clientId = getClientId();
             return ReactiveTaskSupport.whenAll(
                     unsubscription.getMessage().payload().topics(),
-                    topic -> listener.onUnsubscribe(clientId, topic)
+                    topic -> listener.onUnsubscribe(clientId, Topic.of(topic))
             );
         });
     }

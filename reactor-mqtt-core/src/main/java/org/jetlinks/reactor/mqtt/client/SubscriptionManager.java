@@ -36,15 +36,6 @@ public interface SubscriptionManager {
      * @return 订阅管理器实例
      */
     static SubscriptionManager create() {
-        return new DefaultSubscriptionManager();
-    }
-
-    /**
-     * 创建基于Trie树的高性能订阅管理器
-     *
-     * @return 订阅管理器实例
-     */
-    static SubscriptionManager createTrieBased() {
         return new TrieBasedSubscriptionManager();
     }
 

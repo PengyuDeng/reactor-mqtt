@@ -14,10 +14,10 @@ final class ReactiveTaskSupport {
     static <T> Mono<Void> whenAll(Iterable<T> source, Function<T, Mono<Void>> mapper) {
         List<Mono<Void>> tasks = null;
         for (T value : source) {
-            Mono<Void> task = Mono.defer(() -> {
-                Mono<Void> actual = mapper.apply(value);
-                return actual != null ? actual : Mono.empty();
-            });
+            Mono<Void> task = mapper.apply(value);
+            if (task == null) {
+                continue;
+            }
             if (tasks == null) {
                 tasks = new ArrayList<>();
             }
@@ -25,6 +25,9 @@ final class ReactiveTaskSupport {
         }
         if (tasks == null || tasks.isEmpty()) {
             return Mono.empty();
+        }
+        if (tasks.size() == 1) {
+            return tasks.get(0);
         }
         return Mono.whenDelayError(tasks.toArray(Mono[]::new));
     }

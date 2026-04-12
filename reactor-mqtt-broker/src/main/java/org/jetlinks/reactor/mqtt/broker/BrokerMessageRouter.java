@@ -22,6 +22,7 @@ import io.netty.handler.codec.mqtt.MqttQoS;
 import org.jetlinks.reactor.mqtt.Topic;
 import org.jetlinks.reactor.mqtt.TopicTrie;
 import org.jetlinks.reactor.mqtt.server.ServerConnection;
+import org.jetlinks.reactor.mqtt.server.ServerReceivedPublish;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
@@ -80,20 +81,20 @@ class BrokerMessageRouter implements ServerConnectionListener {
     }
 
     @Override
-    public Mono<Void> onSubscribe(String clientId, String topic) {
+    public Mono<Void> onSubscribe(String clientId, Topic topic) {
         addSubscription(clientId, topic);
         return Mono.empty();
     }
 
     @Override
-    public Mono<Void> onUnsubscribe(String clientId, String topic) {
+    public Mono<Void> onUnsubscribe(String clientId, Topic topic) {
         removeSubscription(clientId, topic);
         return Mono.empty();
     }
 
     @Override
-    public Mono<Void> onPublish(String clientId, MqttPublishMessage message) {
-        return publish(clientId, message);
+    public Mono<Void> onPublish(String clientId, ServerReceivedPublish publish) {
+        return publish(clientId, publish);
     }
 
 
@@ -140,9 +141,9 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param clientId 客户端ID
      * @param topic    订阅的主题（可能包含通配符）
      */
-    private void addSubscription(String clientId, String topic) {
-        subscriptionTrie.addSubscription(Topic.of(topic).getLevels(), clientId);
-        log.log(Level.FINE, () -> "Client " + clientId + " subscribed to: " + topic);
+    private void addSubscription(String clientId, Topic topic) {
+        subscriptionTrie.addSubscription(topic.getLevels(), clientId);
+        log.log(Level.FINE, () -> "Client " + clientId + " subscribed to: " + topic.getValue());
     }
 
     /**
@@ -151,9 +152,9 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param clientId 客户端ID
      * @param topic    要取消订阅的主题
      */
-    private void removeSubscription(String clientId, String topic) {
-        subscriptionTrie.removeSubscription(Topic.of(topic).getLevels(), clientId);
-        log.log(Level.FINE, () -> "Client " + clientId + " unsubscribed from: " + topic);
+    private void removeSubscription(String clientId, Topic topic) {
+        subscriptionTrie.removeSubscription(topic.getLevels(), clientId);
+        log.log(Level.FINE, () -> "Client " + clientId + " unsubscribed from: " + topic.getValue());
     }
 
     /**
@@ -168,20 +169,21 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param retain            是否保留
      * @return 发布完成的Mono
      */
-    private Mono<Void> publish(String publisherClientId, String topic, ByteBuf payload, MqttQoS qos, boolean retain) {
+    private Mono<Void> publish(String publisherClientId, Topic topic, ByteBuf payload, MqttQoS qos, boolean retain) {
         // 使用 Trie 树快速查找所有匹配的订阅者 - O(L) 复杂度
-        Set<String> matchedClients = subscriptionTrie.findMatches(Topic.of(topic).getLevels());
+        Set<String> matchedClients = subscriptionTrie.findMatches(topic.getLevels());
+        String topicValue = topic.getValue();
 
         if (matchedClients.isEmpty()) {
-            log.log(Level.FINE, () -> "No subscribers for topic: " + topic);
+            log.log(Level.FINE, () -> "No subscribers for topic: " + topicValue);
             return Mono.empty();
         }
 
-        log.log(Level.FINE, () -> "Publishing to topic " + topic + " for " + matchedClients.size() + " clients");
+        log.log(Level.FINE, () -> "Publishing to topic " + topicValue + " for " + matchedClients.size() + " clients");
 
         return ReactiveTaskSupport.whenAll(
                 matchedClients,
-                clientId -> publishToClient(clientId, topic, payload, qos, retain)
+                clientId -> publishToClient(clientId, topicValue, payload, qos, retain)
         );
     }
 
@@ -192,13 +194,12 @@ class BrokerMessageRouter implements ServerConnectionListener {
      * @param message           MQTT发布消息
      * @return 发布完成的Mono
      */
-    private Mono<Void> publish(String publisherClientId, MqttPublishMessage message) {
-        String topic = message.variableHeader().topicName();
-        ByteBuf payload = message.payload();
-        MqttQoS qos = message.fixedHeader().qosLevel();
-        boolean retain = message.fixedHeader().isRetain();
+    private Mono<Void> publish(String publisherClientId, ServerReceivedPublish publish) {
+        ByteBuf payload = publish.message().payload();
+        MqttQoS qos = publish.message().fixedHeader().qosLevel();
+        boolean retain = publish.message().fixedHeader().isRetain();
 
-        return publish(publisherClientId, topic, payload, qos, retain);
+        return publish(publisherClientId, publish.topic(), payload, qos, retain);
     }
 
     private Mono<Void> publishToClient(String clientId,
